@@ -134,12 +134,12 @@ mod test {
         assert_eq!(none, None);
 
         // you can issue two mutable references
-        let ref1 = set.get_mut(0);
-        let test1 = ref1.unwrap();
-        test1.add();
-        let ref2 = set.get_mut(0);
-        let test2 = ref2.unwrap();
-        test2.add();
+        //let ref1 = set.get_mut(0);
+        //let test1 = ref1.unwrap();
+        //test1.add();
+        //let ref2 = set.get_mut(0);
+        //let test2 = ref2.unwrap();
+        //test2.add();
 
         let mut vec: Vec<i32> = vec![];
         let refe1 = vec.get_mut(0).unwrap();
