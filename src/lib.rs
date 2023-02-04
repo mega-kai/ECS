@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
-#![feature(core_intrinsics, portable_simd)]
-use std::{any::TypeId, fmt::Debug};
+#![feature(core_intrinsics, portable_simd, alloc_layout_extra)]
+use std::{alloc::Layout, any::TypeId, fmt::Debug, num::NonZeroUsize, ptr::NonNull, vec::IntoIter};
 
 //for serde
 trait Component: Debug + Copy + Clone + 'static {}
@@ -19,12 +19,109 @@ impl Key {
     }
 }
 
-struct TypeErasedVec {}
+struct TypeErasedOwningPtr {
+    layout: Layout,
+    raw_ptr: NonNull<u8>,
+}
+impl TypeErasedOwningPtr {
+    fn get_layout(&self) -> Layout {
+        self.layout
+    }
+}
+
+struct TypeErasedSharedPtr {
+    layout: Layout,
+    raw_ptr: NonNull<u8>,
+}
+impl TypeErasedSharedPtr {
+    fn get_layout(&self) -> Layout {
+        self.layout
+    }
+}
+
+struct TypeErasedMutPtr {
+    layout: Layout,
+    raw_ptr: NonNull<u8>,
+}
+impl TypeErasedMutPtr {
+    fn get_layout(&self) -> Layout {
+        self.layout
+    }
+}
+
+struct TypeErasedVec {
+    //of the component type
+    data_layout: Layout,
+    //ptr to a byte
+    data_heap_ptr: NonNull<u8>,
+    //[1,inf]
+    len: usize,
+    capacity: usize,
+}
 impl TypeErasedVec {
-    fn push() {}
-    fn get() {}
-    fn get_mut() {}
-    fn remove() {}
+    /// does not handle ZST
+    fn new<T>() -> Self {
+        assert!(std::mem::size_of::<T>() != 0, "it's a ZST");
+        let layout = Layout::new::<T>();
+        let mut val = Self {
+            data_layout: layout,
+            data_heap_ptr: layout.dangling(),
+            len: 0,
+            capacity: 0,
+        };
+        //all new vec gets 64 free space
+        val.grow_capacity(unsafe { NonZeroUsize::new_unchecked(64) });
+        val
+    }
+
+    fn push(&mut self, owning_ptr: TypeErasedOwningPtr) {
+        assert_eq!(self.data_layout, owning_ptr.get_layout());
+
+        if self.len >= self.capacity {
+            //double the cap
+            self.grow_capacity(unsafe { NonZeroUsize::new_unchecked(self.capacity) });
+            self.insert_from_ptr(self.len - 1, owning_ptr);
+        } else {
+            self.insert_from_ptr(self.len - 1, owning_ptr);
+        }
+    }
+
+    /// try to make sure this is only used to double the capacity
+    fn grow_capacity(&mut self, grow: NonZeroUsize) {
+        let new_capacity = self.capacity + grow.get();
+        let (new_layout, _) = self
+            .data_layout
+            .repeat(new_capacity)
+            .expect("could not repeat this layout");
+        let new_data_ptr = if self.capacity == 0 {
+            unsafe { std::alloc::alloc(new_layout) }
+        } else {
+            unsafe {
+                std::alloc::realloc(
+                    //starting at
+                    self.data_heap_ptr.as_ptr(),
+                    //the extent to uproot
+                    self.data_layout
+                        .repeat(self.capacity)
+                        .expect("could not repeat layout")
+                        .0,
+                    //length of the new memory
+                    new_layout.size(),
+                )
+            }
+        };
+        self.capacity = new_capacity;
+        self.data_heap_ptr = unsafe { NonNull::new_unchecked(new_data_ptr) };
+    }
+
+    fn insert_from_ptr(&mut self, index: usize, owning_ptr: TypeErasedOwningPtr) {
+        self.len += 1;
+    }
+
+    fn get(&self) {}
+    fn get_mut(&mut self) {}
+    fn remove(&mut self, index: usize) {}
+    fn swap(&mut self) {}
 }
 
 struct SparseSet {
@@ -38,6 +135,15 @@ impl SparseSet {
     fn remove() {}
     fn get() {}
     fn get_mut() {}
+}
+impl IntoIterator for SparseSet {
+    type Item = u8;
+
+    type IntoIter = IntoIter<u8>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        todo!()
+    }
 }
 
 struct Scheduler {
@@ -97,5 +203,11 @@ mod test {
         let mut ecs = ECS::new();
         ecs.add_system(test);
         ecs.next();
+    }
+
+    #[test]
+    fn iter() {
+        let mut iter = [12; 3].iter();
+        iter.next();
     }
 }
