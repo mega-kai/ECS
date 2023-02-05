@@ -1,6 +1,14 @@
 #![allow(dead_code, unused_variables)]
 #![feature(core_intrinsics, portable_simd, alloc_layout_extra)]
-use std::{alloc::Layout, any::TypeId, fmt::Debug, num::NonZeroUsize, ptr::NonNull, vec::IntoIter};
+use std::{
+    alloc::Layout,
+    any::{type_name, TypeId},
+    collections::HashMap,
+    fmt::Debug,
+    num::NonZeroUsize,
+    ptr::NonNull,
+    vec::IntoIter,
+};
 
 //for serde
 trait Component: Debug + Copy + Clone + 'static {}
@@ -126,9 +134,8 @@ impl TypeErasedVec {
 
 struct SparseSet {
     dense: TypeErasedVec,
-    //usize = TypeErasedVec.index,
+    //usize == TypeErasedVec.index,
     sparse: Vec<usize>,
-    id: TypeId,
 }
 impl SparseSet {
     fn add() {}
@@ -165,14 +172,65 @@ impl Scheduler {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ComponentID {
+    name: &'static str,
+    id: TypeId,
+}
+impl ComponentID {
+    fn new<C: Component>() -> Self {
+        Self {
+            name: type_name::<C>(),
+            id: TypeId::of::<C>(),
+        }
+    }
+}
+
+struct Storage {
+    // no repeating items
+    data_hash: HashMap<ComponentID, SparseSet>,
+}
+impl Storage {
+    fn new() -> Self {
+        Self {
+            data_hash: HashMap::new(),
+        }
+    }
+
+    /// this function is supposed to return an iterator of either &C, &mut C or C
+    fn query<C: Component>(&mut self) -> Option<()> {
+        if self.check_if_component_exists::<C>() {
+            //do the query
+            Some(())
+        } else {
+            //return either an empty query_result or None
+            None
+        }
+    }
+
+    fn check_if_component_exists<C: Component>(&self) -> bool {
+        let check_against = ComponentID::new::<C>();
+        let result = self.data_hash.get(&check_against);
+        result.is_some()
+    }
+
+    fn add_existing_component(&mut self) {
+        todo!()
+    }
+
+    fn init_new_component(&mut self) {
+        todo!()
+    }
+}
+
 struct ECS {
-    storage: Vec<SparseSet>,
+    storage: Storage,
     scheduler: Scheduler,
 }
 impl ECS {
     fn new() -> Self {
         Self {
-            storage: vec![],
+            storage: Storage::new(),
             scheduler: Scheduler::new(),
         }
     }
@@ -183,6 +241,19 @@ impl ECS {
 
     fn add_system(&mut self, func: fn()) {
         self.scheduler.add_system(func);
+    }
+
+    fn spawn<C: Component>(&mut self, component: C) {
+        //generate key
+        if self.storage.check_if_component_exists::<C>() {
+            self.storage.add_existing_component();
+        } else {
+            self.storage.init_new_component();
+        }
+    }
+
+    fn query<C: Component>(&mut self) {
+        self.storage.query::<C>();
     }
 }
 
@@ -203,6 +274,8 @@ mod test {
         let mut ecs = ECS::new();
         ecs.add_system(test);
         ecs.next();
+
+        ecs.spawn(Test(12));
     }
 
     #[test]
