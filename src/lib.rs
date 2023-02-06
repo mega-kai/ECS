@@ -1,5 +1,11 @@
 #![allow(dead_code, unused_variables)]
-#![feature(core_intrinsics, portable_simd, alloc_layout_extra)]
+#![feature(
+    core_intrinsics,
+    portable_simd,
+    alloc_layout_extra,
+    never_type,
+    exhaustive_patterns
+)]
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -46,32 +52,50 @@ impl Key {
 }
 
 struct TypeErasedVec {
-    //of the component type
-    data_layout: Layout,
-    //ptr to a byte
+    layout_of_component: Layout,
     data_heap_ptr: NonNull<u8>,
-    //[1,inf]
     len: usize,
     capacity: usize,
 }
 impl TypeErasedVec {
     /// does not handle ZST
     fn new<T>() -> Self {
-        assert!(std::mem::size_of::<T>() != 0, "it's a ZST");
+        assert!(
+            std::mem::size_of::<T>() != 0,
+            "{} is a ZST",
+            std::any::type_name::<T>()
+        );
+
         let layout = Layout::new::<T>();
-        let mut val = Self {
-            data_layout: layout,
+        let val = Self {
+            layout_of_component: layout,
             data_heap_ptr: layout.dangling(),
             len: 0,
             capacity: 0,
         };
-        //all new vec gets 64 free space
-        val.grow_capacity(unsafe { NonZeroUsize::new_unchecked(64) });
+        val
+    }
+
+    fn with_capacity<T>(size: NonZeroUsize) -> Self {
+        assert!(
+            std::mem::size_of::<T>() != 0,
+            "{} is a ZST",
+            std::any::type_name::<T>()
+        );
+
+        let layout = Layout::new::<T>();
+        let mut val = Self {
+            layout_of_component: layout,
+            data_heap_ptr: layout.dangling(),
+            len: 0,
+            capacity: 0,
+        };
+        val.grow_capacity(size);
         val
     }
 
     fn push(&mut self, ptr: NonNull<u8>, layout: Layout) {
-        assert_eq!(self.data_layout, layout);
+        assert_eq!(self.layout_of_component, layout);
 
         if self.len >= self.capacity {
             //double the cap
@@ -86,7 +110,7 @@ impl TypeErasedVec {
     fn grow_capacity(&mut self, grow: NonZeroUsize) {
         let new_capacity = self.capacity + grow.get();
         let (new_layout, _) = self
-            .data_layout
+            .layout_of_component
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = if self.capacity == 0 {
@@ -97,7 +121,7 @@ impl TypeErasedVec {
                     //starting at
                     self.data_heap_ptr.as_ptr(),
                     //the extent to uproot
-                    self.data_layout
+                    self.layout_of_component
                         .repeat(self.capacity)
                         .expect("could not repeat layout")
                         .0,
@@ -240,9 +264,20 @@ mod test {
         ecs.spawn(Test(12));
     }
 
+    fn take_fn_once<F>(f: F)
+    where
+        F: Fn() -> (),
+    {
+        f()
+    }
+
     #[test]
     fn iter() {
         let mut iter = [12; 3].iter();
         iter.next();
+        let result: Result<usize, !> = Ok(12);
+
+        //with exhaustive patterns feature turned on, it will auto omit the ! variant
+        let Ok(value) = result;
     }
 }
