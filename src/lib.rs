@@ -10,8 +10,26 @@ use std::{
     vec::IntoIter,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ComponentID {
+    name: &'static str,
+    id: TypeId,
+}
+impl ComponentID {
+    fn new<C: Component>() -> Self {
+        Self {
+            name: type_name::<C>(),
+            id: TypeId::of::<C>(),
+        }
+    }
+}
+
 //for serde
-trait Component: Debug + Copy + Clone + 'static {}
+trait Component: Debug + Copy + Clone + 'static {
+    fn generate_id() -> ComponentID {
+        ComponentID::new::<Self>()
+    }
+}
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 struct Key {
@@ -24,36 +42,6 @@ impl Key {
             index,
             generation: 0,
         }
-    }
-}
-
-struct TypeErasedOwningPtr {
-    layout: Layout,
-    raw_ptr: NonNull<u8>,
-}
-impl TypeErasedOwningPtr {
-    fn get_layout(&self) -> Layout {
-        self.layout
-    }
-}
-
-struct TypeErasedSharedPtr {
-    layout: Layout,
-    raw_ptr: NonNull<u8>,
-}
-impl TypeErasedSharedPtr {
-    fn get_layout(&self) -> Layout {
-        self.layout
-    }
-}
-
-struct TypeErasedMutPtr {
-    layout: Layout,
-    raw_ptr: NonNull<u8>,
-}
-impl TypeErasedMutPtr {
-    fn get_layout(&self) -> Layout {
-        self.layout
     }
 }
 
@@ -82,15 +70,15 @@ impl TypeErasedVec {
         val
     }
 
-    fn push(&mut self, owning_ptr: TypeErasedOwningPtr) {
-        assert_eq!(self.data_layout, owning_ptr.get_layout());
+    fn push(&mut self, ptr: NonNull<u8>, layout: Layout) {
+        assert_eq!(self.data_layout, layout);
 
         if self.len >= self.capacity {
             //double the cap
             self.grow_capacity(unsafe { NonZeroUsize::new_unchecked(self.capacity) });
-            self.insert_from_ptr(self.len - 1, owning_ptr);
+            self.insert_from_ptr(self.len - 1, ptr);
         } else {
-            self.insert_from_ptr(self.len - 1, owning_ptr);
+            self.insert_from_ptr(self.len - 1, ptr);
         }
     }
 
@@ -122,7 +110,7 @@ impl TypeErasedVec {
         self.data_heap_ptr = unsafe { NonNull::new_unchecked(new_data_ptr) };
     }
 
-    fn insert_from_ptr(&mut self, index: usize, owning_ptr: TypeErasedOwningPtr) {
+    fn insert_from_ptr(&mut self, index: usize, ptr: NonNull<u8>) {
         self.len += 1;
     }
 
@@ -138,7 +126,7 @@ struct SparseSet {
     sparse: Vec<usize>,
 }
 impl SparseSet {
-    fn add() {}
+    fn add(&mut self, ptr: NonNull<u8>) {}
     fn remove() {}
     fn get() {}
     fn get_mut() {}
@@ -149,6 +137,33 @@ impl IntoIterator for SparseSet {
     type IntoIter = IntoIter<u8>;
 
     fn into_iter(self) -> Self::IntoIter {
+        todo!()
+    }
+}
+
+struct Storage {
+    // no repeating items
+    data_hash: HashMap<ComponentID, SparseSet>,
+}
+impl Storage {
+    fn new() -> Self {
+        Self {
+            data_hash: HashMap::new(),
+        }
+    }
+
+    fn add_component<C: Component>(&mut self, key: Key, component: C) {
+        let check_against = ComponentID::new::<C>();
+        let result = self.data_hash.get_mut(&check_against);
+        if let Some(access) = result {
+            //add component
+        } else {
+            //create a new
+        }
+    }
+
+    /// this function is supposed to return an iterator of either &C, &mut C or C
+    fn query<C: Component>(&mut self) -> Option<()> {
         todo!()
     }
 }
@@ -172,57 +187,6 @@ impl Scheduler {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct ComponentID {
-    name: &'static str,
-    id: TypeId,
-}
-impl ComponentID {
-    fn new<C: Component>() -> Self {
-        Self {
-            name: type_name::<C>(),
-            id: TypeId::of::<C>(),
-        }
-    }
-}
-
-struct Storage {
-    // no repeating items
-    data_hash: HashMap<ComponentID, SparseSet>,
-}
-impl Storage {
-    fn new() -> Self {
-        Self {
-            data_hash: HashMap::new(),
-        }
-    }
-
-    /// this function is supposed to return an iterator of either &C, &mut C or C
-    fn query<C: Component>(&mut self) -> Option<()> {
-        if self.check_if_component_exists::<C>() {
-            //do the query
-            Some(())
-        } else {
-            //return either an empty query_result or None
-            None
-        }
-    }
-
-    fn check_if_component_exists<C: Component>(&self) -> bool {
-        let check_against = ComponentID::new::<C>();
-        let result = self.data_hash.get(&check_against);
-        result.is_some()
-    }
-
-    fn add_existing_component(&mut self) {
-        todo!()
-    }
-
-    fn init_new_component(&mut self) {
-        todo!()
-    }
-}
-
 struct ECS {
     storage: Storage,
     scheduler: Scheduler,
@@ -243,13 +207,11 @@ impl ECS {
         self.scheduler.add_system(func);
     }
 
-    fn spawn<C: Component>(&mut self, component: C) {
+    fn spawn<C: Component>(&mut self, component: C) -> Key {
         //generate key
-        if self.storage.check_if_component_exists::<C>() {
-            self.storage.add_existing_component();
-        } else {
-            self.storage.init_new_component();
-        }
+        let key = Key::new(0);
+        self.storage.add_component(key, component);
+        key
     }
 
     fn query<C: Component>(&mut self) {
