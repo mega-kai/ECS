@@ -278,6 +278,7 @@ mod test {
         let result: Result<usize, !> = Ok(12);
 
         //with exhaustive patterns feature turned on, it will auto omit the ! variant
+
         let Ok(value) = result;
     }
 }
