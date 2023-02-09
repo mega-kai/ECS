@@ -1,11 +1,5 @@
 #![allow(dead_code, unused_variables)]
-#![feature(
-    core_intrinsics,
-    portable_simd,
-    alloc_layout_extra,
-    never_type,
-    exhaustive_patterns
-)]
+#![feature(alloc_layout_extra)]
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -262,23 +256,5 @@ mod test {
         ecs.next();
 
         ecs.spawn(Test(12));
-    }
-
-    fn take_fn_once<F>(f: F)
-    where
-        F: Fn() -> (),
-    {
-        f()
-    }
-
-    #[test]
-    fn iter() {
-        let mut iter = [12; 3].iter();
-        iter.next();
-        let result: Result<usize, !> = Ok(12);
-
-        //with exhaustive patterns feature turned on, it will auto omit the ! variant
-
-        let Ok(value) = result;
     }
 }
