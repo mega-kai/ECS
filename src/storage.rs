@@ -6,6 +6,13 @@ use std::{
     ptr::{null, NonNull},
 };
 
+/// marker trait on &Component and &mut Component, used as querying
+/// generic type argument
+pub trait QueryIdentifier {}
+// impl<C: Component> ComponentSharedRef for C {}
+impl<C> QueryIdentifier for &C where C: Component {}
+impl<C> QueryIdentifier for &mut C where C: Component {}
+
 /// a type erased vector
 struct TypeErasedVec {
     layout_of_component: Layout,
