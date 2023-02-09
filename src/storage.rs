@@ -156,7 +156,6 @@ impl Storage {
         }
     }
 
-    /// the return value will be used to manufacture a key
     pub fn add_component<C: Component>(&mut self, component: C) -> usize {
         let id = component.id();
         let result = self.data_hash.get_mut(&id);
@@ -170,7 +169,7 @@ impl Storage {
     }
 
     /// this function is supposed to return an iterator of either &C, &mut C or C
-    pub fn query<C: ComponentRef>(&mut self) -> Option<C> {
+    pub fn query<C: QueryIdentifier>(&mut self) -> Option<C> {
         todo!()
     }
 }

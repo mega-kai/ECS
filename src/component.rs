@@ -33,7 +33,7 @@ pub trait Component: Debug + Copy + Clone + 'static {
 
 /// marker trait on &Component and &mut Component, used as querying
 /// generic type argument
-pub trait ComponentRef {}
+pub trait QueryIdentifier {}
 // impl<C: Component> ComponentSharedRef for C {}
-impl<C> ComponentRef for &C where C: Component {}
-impl<C> ComponentRef for &mut C where C: Component {}
+impl<C> QueryIdentifier for &C where C: Component {}
+impl<C> QueryIdentifier for &mut C where C: Component {}
