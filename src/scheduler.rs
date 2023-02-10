@@ -8,17 +8,20 @@ use crate::storage::*;
 /// cycle, which is after the execution phase
 pub struct Command {}
 impl Command {
-    pub fn new() -> Self {
+    fn new() -> Self {
         todo!()
     }
 
-    pub fn spawn_component(&mut self) {}
+    pub fn spawn_component<C: Component>(&mut self, component: C) -> ComponentKey {
+        todo!()
+    }
 
-    pub fn destroy_component(&mut self) {}
+    //should you need an exclusive access to that component to destroy it??
+    pub fn destroy_component<C: Component>(&mut self, mut_access: &mut C) {}
 
     /// perhaps the storage also stores linking information alongside with
     /// the actual component data
-    pub fn link_component(&mut self) {}
+    pub fn link_component(&mut self, one: ComponentKey, another: ComponentKey) {}
 
     pub fn unlink_component(&mut self) {}
 }
@@ -60,11 +63,11 @@ pub struct System {
     execution_frequency: ExecutionFrequency,
     //no dynamic querying
     query_request: QueryList,
-    fn_ptr: fn(Command, QueryResult),
+    fn_ptr: fn(Command, QueryResult) -> Command,
 }
 impl System {
     /// generate a stub system that runs every game tick
-    pub fn default(fn_ptr: fn(Command, QueryResult)) -> Self {
+    pub fn default(fn_ptr: fn(Command, QueryResult) -> Command) -> Self {
         Self {
             fn_ptr,
             query_request: QueryList::empty(),
