@@ -18,7 +18,7 @@ use std::{
 /// With only guarantees that such component exists along with the
 /// ones you are querying, while &B can give you read access to its data
 
-/// a key to access
+/// a key to access a component, which includes entities and child entities
 pub struct ComponentKey {
     index: usize,
     generation: usize,
@@ -51,38 +51,11 @@ pub trait Component: Debug + Copy + Clone + 'static {
     }
 }
 
-/// an iterator of results prepared by the
-#[derive(Debug, Clone, Copy)]
-pub struct QueryRequest {}
-impl QueryRequest {
-    pub fn empty() -> Self {
+pub struct CommandBuffer {}
+impl CommandBuffer {
+    pub fn new() -> Self {
         Self {}
     }
-}
 
-/// impl intoiterator on this, iter() returns an iter of &Component
-/// while iter_mut returns an iter of &mut Component
-pub struct QueryResult(/* a bunch of references to components */);
-impl QueryResult {
-    pub fn new() -> Self {
-        todo!()
-    }
-
-    pub fn does_things_with_the_result(&mut self) {}
-}
-
-/// queue up commands, those commands would be applied after all systems are executed
-pub struct CommandQueue {}
-impl CommandQueue {
-    pub fn new() -> Self {
-        todo!()
-    }
-
-    pub fn spawn_component(&mut self) {}
-
-    pub fn destroy_component(&mut self) {}
-
-    pub fn attach_component_to_another(&mut self) {}
-
-    pub fn remove_component_from_another(&mut self) {}
+    pub fn take() {}
 }

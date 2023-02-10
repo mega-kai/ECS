@@ -1,4 +1,5 @@
 use crate::component::*;
+use crate::scheduler::*;
 use std::{
     alloc::Layout,
     collections::HashMap,
@@ -157,7 +158,7 @@ impl Storage {
     }
 
     /// this function is supposed to return an iterator of either &C, &mut C or C
-    pub fn query(&mut self, query_request: QueryRequest) -> Option<()> {
+    pub fn query(&mut self, query_request: QueryList) -> Option<()> {
         todo!()
     }
 }
