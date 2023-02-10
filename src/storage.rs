@@ -6,13 +6,6 @@ use std::{
     ptr::{null, NonNull},
 };
 
-/// marker trait on &Component and &mut Component, used as querying
-/// generic type argument
-pub trait QueryIdentifier {}
-// impl<C: Component> ComponentSharedRef for C {}
-impl<C> QueryIdentifier for &C where C: Component {}
-impl<C> QueryIdentifier for &mut C where C: Component {}
-
 /// a type erased vector
 struct TypeErasedVec {
     layout_of_component: Layout,
@@ -136,18 +129,6 @@ impl SparseSet {
     }
 }
 
-/// but in fact this interates mainly over the dense
-/// vec rather than the whole set
-// impl IntoIterator for SparseSet {
-//     type Item = u8;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         todo!()
-//     }
-
-//     type IntoIter = u8;
-// }
-
 /// a hash map of ComponentIDs as keys and SparseSets as values
 /// functioning as a central hub for adding/accessing stored components;
 /// there will be a sparse set just for the entities, which are composed
@@ -176,7 +157,7 @@ impl Storage {
     }
 
     /// this function is supposed to return an iterator of either &C, &mut C or C
-    pub fn query<C: QueryIdentifier>(&mut self) -> Option<C> {
+    pub fn query(&mut self, query_request: QueryRequest) -> Option<()> {
         todo!()
     }
 }
