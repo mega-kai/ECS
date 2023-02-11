@@ -91,24 +91,31 @@ mod test {
     impl<T, U> SystemParam for Query<T, U> {}
 
     //the number of syses depend on how many types of system parameters are there: Command, Query
-    trait SystemFunc {}
+    trait SystemFunc {
+        fn run() {}
+    }
     //dumb system
-    impl SystemFunc for fn() {}
-    //type that only takes a command and returns a command
-    impl<SysParam1: SystemParam> SystemFunc for fn(SysParam1) -> Command {}
+    impl<F: FnMut()> SystemFunc for F {}
+
+    impl<Sys, F> SystemFunc for F
+    where
+        F: FnMut(Sys),
+        Sys: SystemParam,
+    {
+    }
     impl<SysParam1: SystemParam, SysParam2: SystemParam> SystemFunc
         for fn(SysParam1, SysParam2) -> Command
     {
     }
 
-    fn sys() {}
+    fn testtest(num: i32) {}
 
     /// would take any system
     fn take_system<Sys: SystemFunc>(system: Sys) {}
 
     #[test]
     fn ecs() {
-        take_system(sys);
+        take_system(testtest /* this is actually a function item */);
         //new ecs
         let mut ecs = ECS::new();
 
