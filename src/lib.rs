@@ -63,21 +63,52 @@ mod test {
     struct Test(i32);
     impl Component for Test {}
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct Test2(i32);
+    impl Component for Test2 {}
+
     //function is a system's vital part, has a standard format of input
     //and output
-    fn spawn(mut command: Command, mut result: QueryResult) -> Command {
+    fn spawn(mut command: Command, mut query_result: QueryResult) -> Command {
         println!("hello ecs!");
         //spawn a bunch of components and link them together
         let key1 = command.spawn_component(Test(1));
         let key2 = command.spawn_component(Test(2));
         command.link_component(key1, key2);
         //do some manipulation on the results
-        result.does_things_with_the_result();
+        query_result.does_things_with_the_result();
         command
     }
 
+    //something like Query<&mut Test, Without<Test2>>
+    struct Query<T, U> {
+        access: T,
+        filter: U,
+    }
+
+    trait SystemParam {}
+    impl SystemParam for Command {}
+    impl<T, U> SystemParam for Query<T, U> {}
+
+    //the number of syses depend on how many types of system parameters are there: Command, Query
+    trait SystemFunc {}
+    //dumb system
+    impl SystemFunc for fn() {}
+    //type that only takes a command and returns a command
+    impl<SysParam1: SystemParam> SystemFunc for fn(SysParam1) -> Command {}
+    impl<SysParam1: SystemParam, SysParam2: SystemParam> SystemFunc
+        for fn(SysParam1, SysParam2) -> Command
+    {
+    }
+
+    fn sys() {}
+
+    /// would take any system
+    fn take_system<Sys: SystemFunc>(system: Sys) {}
+
     #[test]
     fn ecs() {
+        take_system(sys);
         //new ecs
         let mut ecs = ECS::new();
 
