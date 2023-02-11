@@ -23,7 +23,7 @@ pub struct ComponentID {
 
 /// marker trait for components
 /// TODO! proc macro derive
-pub trait Component: Debug + Copy + Clone + 'static {
+pub trait Component: Copy + Clone + 'static {
     fn id(&self) -> ComponentID {
         ComponentID {
             name: type_name::<Self>(),
