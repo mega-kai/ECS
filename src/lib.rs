@@ -73,14 +73,12 @@ mod test {
 
     //function is a system's vital part, has a standard format of input
     //and output
-    fn spawn(mut command: Command, mut query_result: QueryResult) -> Command {
+    fn spawn(mut command: Command, this: ()) -> Command {
         println!("hello ecs!");
         //spawn a bunch of components and link them together
         let key1 = command.spawn_component(Test(1));
         let key2 = command.spawn_component(Test(2));
         command.link_component(key1, key2);
-        //do some manipulation on the results
-        query_result.does_things_with_the_result();
         command
     }
 

@@ -159,8 +159,7 @@ impl Storage {
         0
     }
 
-    /// this function is supposed to return an iterator of either &C, &mut C or C
-    pub fn query(&mut self, query_request: QueryList) -> Option<()> {
+    pub fn query(&mut self, query_request: ()) -> Option<()> {
         todo!()
     }
 }

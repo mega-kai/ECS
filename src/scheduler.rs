@@ -18,11 +18,11 @@ pub struct System {
     execution_frequency: ExecutionFrequency,
     //no dynamic querying
     query_request: QueryList,
-    fn_ptr: fn(Command, QueryResult) -> Command,
+    fn_ptr: fn(Command, ()) -> Command,
 }
 impl System {
     /// generate a stub system that runs every game tick
-    pub fn default(fn_ptr: fn(Command, QueryResult) -> Command) -> Self {
+    pub fn default(fn_ptr: fn(Command, ()) -> Command) -> Self {
         Self {
             fn_ptr,
             query_request: QueryList::empty(),
@@ -80,7 +80,7 @@ impl Scheduler {
     /// in batch after execution phase
     pub fn execute_all(&self) {
         for system in &self.queue {
-            (system.fn_ptr)(Command::new(), QueryResult::new());
+            (system.fn_ptr)(Command::new(), ());
         }
     }
 }
