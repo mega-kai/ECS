@@ -7,6 +7,7 @@ use std::{
 };
 
 /// a key to access a component, which includes entities and child entities
+#[derive(Debug, Clone, Copy)]
 pub struct ComponentKey {
     index: usize,
     generation: usize,

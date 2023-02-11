@@ -3,41 +3,7 @@ use crate::command_buffer::*;
 use crate::component::*;
 use crate::query::*;
 use crate::storage::*;
-#[derive(Debug, Clone, Copy)]
-pub enum ExecutionFrequency {
-    Always,
-    Once,
-    //make sure it's not smaller than the tick duration
-    Timed(f64), //in sec
-}
-
-/// a system containing metadata
-#[derive(Clone, Copy, Debug)]
-pub struct System {
-    //add ordering information
-    execution_frequency: ExecutionFrequency,
-    //no dynamic querying
-    query_request: QueryList,
-    fn_ptr: fn(Command, ()) -> Command,
-}
-impl System {
-    /// generate a stub system that runs every game tick
-    pub fn default(fn_ptr: fn(Command, ()) -> Command) -> Self {
-        Self {
-            fn_ptr,
-            query_request: QueryList::empty(),
-            execution_frequency: ExecutionFrequency::Always,
-        }
-    }
-}
-
-pub struct QueryOrder {}
-impl QueryOrder {
-    fn empty() -> Self {
-        Self {}
-    }
-}
-
+use crate::system::*;
 /// storing and running all the systems, generating ordered queue for those
 /// systems to run, all the while requesting
 pub struct Scheduler {
@@ -63,16 +29,14 @@ impl Scheduler {
     }
 
     /// organzie self.queue so that it reflects on their metadata
-    /// this needs to be done every before execution cycle
-    pub fn generate_queue_for_current_cycle(&mut self) -> QueryOrder {
-        //first take out all once systems;
-        //second take out all the timed
+    /// this needs to be done every tick before execution cycle
+    pub fn generate_queue_for_current_tick(&mut self) {
+        //1. take out all once systems from the current queue;
+        //2. take out all the timed systems from the queue;
+        //3. inserting all the timed systems with timers up into the queue;
+        //4.
 
         //check the flag, if on, shove the newly added system to the queue
-
-        //sort the thing
-        //generate a query order from the sorted systems
-        QueryOrder::empty()
     }
 
     /// when running a system, the only state changes are components data

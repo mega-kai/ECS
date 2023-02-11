@@ -1,15 +1,17 @@
-#![allow(dead_code, unused_variables, unused_imports)]
+#![allow(dead_code, unused_variables, unused_imports, unused_mut)]
 #![feature(alloc_layout_extra)]
 mod command_buffer;
 mod component;
 mod query;
 mod scheduler;
 mod storage;
+mod system;
 use command_buffer::*;
 use component::*;
 use query::*;
 use scheduler::*;
 use storage::*;
+use system::*;
 
 /// the entity component system;
 /// the gist of it is at any given time during any system of the same
@@ -48,7 +50,7 @@ impl ECS {
     pub fn tick(&mut self) {
         //generating a new queue to be executed: queue generation stages
         //this is all side effects, internally mutating the queue field
-        let order = self.scheduler.generate_queue_for_current_cycle();
+        let order = self.scheduler.generate_queue_for_current_tick();
 
         //supplying with all the requested query results: query stage
 
@@ -64,22 +66,46 @@ mod test {
     use super::*;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    struct Test(i32);
-    impl Component for Test {}
+    struct Health(i32);
+    impl Component for Health {}
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    struct Test2(i32);
-    impl Component for Test2 {}
+    struct Mana(i32);
+    impl Component for Mana {}
 
-    //function is a system's vital part, has a standard format of input
-    //and output
-    fn spawn(mut command: Command, this: ()) -> Command {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct Player(&'static str);
+    impl Component for Player {}
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct Enemy;
+    impl Component for Enemy {}
+
+    fn player_bundle() -> (Player, Health, Mana) {
+        (Player("Kai"), Health(100), Mana(100))
+    }
+
+    // has a standard format of input and output
+    fn spawn_player(mut command: Command, this: ()) -> Command {
         println!("hello ecs!");
-        //spawn a bunch of components and link them together
-        let key1 = command.spawn_component(Test(1));
-        let key2 = command.spawn_component(Test(2));
-        command.link_component(key1, key2);
+
+        let bundle = player_bundle();
+        //command.spawn_bundle(bundle);
+
+        let player = command.spawn_component(bundle.0);
+        let health_comp = command.spawn_component(bundle.1);
+        let mana_comp = command.spawn_component(bundle.2);
+        command.link_component(player, health_comp);
+        command.link_component(player, mana_comp);
+
         command
+    }
+
+    fn system_that_queries(mut query: ()) {
+        // for (writer, reader) in query {
+        // writer.write();
+        // reader.read();
+        // }
     }
 
     #[test]
@@ -88,7 +114,7 @@ mod test {
         let mut ecs = ECS::new();
 
         //add systems
-        ecs.add_system(System::default(spawn));
+        ecs.add_system(System::default(spawn_player));
 
         //tick cycling
         loop {
