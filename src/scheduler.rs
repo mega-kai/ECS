@@ -10,8 +10,8 @@ pub struct Scheduler {
     //toggle this flag on when ECS::add_system invoked
     //toggle this flag off when a new queue is generated once
     updated: bool,
-    pool: Vec<System>,
-    queue: Vec<System>,
+    pool: Vec<SystemMetadata>,
+    queue: Vec<SystemMetadata>,
 }
 impl Scheduler {
     pub fn new() -> Self {
@@ -22,7 +22,7 @@ impl Scheduler {
         }
     }
 
-    pub fn add_system(&mut self, func: System) {
+    pub fn add_system(&mut self, func: SystemMetadata) {
         //hoops the run thru before
         self.pool.push(func);
         self.updated = true;
@@ -44,7 +44,7 @@ impl Scheduler {
     /// in batch after execution phase
     pub fn execute_all(&self) {
         for system in &self.queue {
-            (system.fn_ptr)(Command::new(), ());
+            //(system.fn_ptr)(Command::new(), ());
         }
     }
 }

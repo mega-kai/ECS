@@ -42,7 +42,11 @@ impl ECS {
     /// call the add_system on self.storage, essentially just pushing
     /// the system object onto a vector of systems, while toggling a flag
     /// that says a new system had been added
-    pub fn add_system<Param: SysParam, Sys: SysFn<Param>>(&mut self, func: Sys) {
+    pub fn add_system<Param: SysParam, Sys: SysFn<Param>>(
+        &mut self,
+        func: Sys,
+        meta: SystemMetadata,
+    ) {
         //self.scheduler.add_system(func);
     }
 
@@ -65,19 +69,19 @@ impl ECS {
 mod test {
     use super::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy)]
     struct Health(i32);
     impl Component for Health {}
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy)]
     struct Mana(i32);
     impl Component for Mana {}
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy)]
     struct Player(&'static str);
     impl Component for Player {}
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy)]
     struct Enemy;
     impl Component for Enemy {}
 
@@ -101,7 +105,7 @@ mod test {
         command
     }
 
-    fn system_that_queries(mut query: Query<Health>) -> Command {
+    fn system_that_queries(mut query: Query) -> Command {
         // for (writer, reader) in query {
         // writer.write();
         // reader.read();
@@ -111,7 +115,7 @@ mod test {
     fn system_that_commands(mut command: Command) -> Command {
         todo!()
     }
-    fn system_that_does_both(mut command: Command, mut query: Query<Health>) -> Command {
+    fn system_that_does_both(mut command: Command, mut query: Query) -> Command {
         todo!()
     }
 
@@ -121,7 +125,7 @@ mod test {
         let mut ecs = ECS::new();
 
         //add systems
-        ecs.add_system(system_that_does_both);
+        ecs.add_system(system_that_does_both, SystemMetadata::default());
 
         //tick cycling
         loop {

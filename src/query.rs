@@ -1,4 +1,4 @@
-//the query api
+// the query api
 
 // queying a single component by an id or index is not allowed;
 
@@ -13,16 +13,47 @@
 // only thing about query result is that it needs to be pregenerated before
 // execution phase, and only changed when the storage/system pool changed
 
+use std::marker::PhantomData;
+
 use crate::component::*;
 
+/// component marker
+pub trait QueryMarker {}
+impl<T> QueryMarker for &T where T: Component {}
+impl<T> QueryMarker for &mut T where T: Component {}
+
+/// query request, which also can be turned
+/// into an iterator to get the access
 #[derive(Debug)]
-pub struct Query<C: Component> {
-    //should also be an intoiterator, sorting the data
-    access: Vec<C>,
+pub struct Query {
+    /// consisted of multiple types
+    access: (),
     filter: (),
 }
-impl<C: Component> Query<C> {
-    fn new() -> Self {
+impl Query {
+    pub fn new() {}
+}
+
+pub struct TestQuery<T, U> {
+    _1: PhantomData<T>,
+    _2: PhantomData<U>,
+}
+impl<T, U> TestQuery<T, U> {
+    fn new<A, B>() -> Self {
         todo!()
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+struct Health(i32);
+impl Component for Health {}
+
+#[derive(Debug, Clone, Copy)]
+struct Mana(i32);
+impl Component for Mana {}
+
+#[derive(Debug, Clone, Copy)]
+struct Player(&'static str);
+impl Component for Player {}
+
+fn test() {}

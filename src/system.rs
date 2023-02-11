@@ -10,17 +10,12 @@ pub enum ExecutionFrequency {
 
 /// a system containing metadata
 #[derive(Clone, Copy, Debug)]
-pub struct System {
-    //add ordering information
+pub struct SystemMetadata {
     execution_frequency: ExecutionFrequency,
-    //no dynamic querying
-    pub(crate) fn_ptr: fn(Command, ()) -> Command,
 }
-impl System {
-    /// generate a stub system that runs every game tick
-    pub fn default(fn_ptr: fn(Command, ()) -> Command) -> Self {
+impl SystemMetadata {
+    pub fn default() -> Self {
         Self {
-            fn_ptr,
             execution_frequency: ExecutionFrequency::Always,
         }
     }
@@ -28,7 +23,7 @@ impl System {
 
 pub trait SysParam {}
 impl SysParam for Command {}
-impl<C: Component> SysParam for Query<C> {}
+impl SysParam for Query {}
 impl<S1> SysParam for (S1,) where S1: SysParam {}
 impl<S1, S2> SysParam for (S1, S2)
 where
