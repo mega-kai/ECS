@@ -42,8 +42,8 @@ impl ECS {
     /// call the add_system on self.storage, essentially just pushing
     /// the system object onto a vector of systems, while toggling a flag
     /// that says a new system had been added
-    pub fn add_system(&mut self, func: System) {
-        self.scheduler.add_system(func);
+    pub fn add_system<Param: SysParam, Sys: SysFn<Param>>(&mut self, func: Sys) {
+        //self.scheduler.add_system(func);
     }
 
     /// a tick cycle consisting of multiple stages
@@ -86,7 +86,7 @@ mod test {
     }
 
     // has a standard format of input and output
-    fn spawn_player(mut command: Command, this: ()) -> Command {
+    fn spawn_player(mut command: Command) -> Command {
         println!("hello ecs!");
 
         let bundle = player_bundle();
@@ -101,11 +101,18 @@ mod test {
         command
     }
 
-    fn system_that_queries(mut query: ()) {
+    fn system_that_queries(mut query: Query<Health>) -> Command {
         // for (writer, reader) in query {
         // writer.write();
         // reader.read();
         // }
+        todo!()
+    }
+    fn system_that_commands(mut command: Command) -> Command {
+        todo!()
+    }
+    fn system_that_does_both(mut command: Command, mut query: Query<Health>) -> Command {
+        todo!()
     }
 
     #[test]
@@ -114,7 +121,7 @@ mod test {
         let mut ecs = ECS::new();
 
         //add systems
-        ecs.add_system(System::default(spawn_player));
+        ecs.add_system(system_that_does_both);
 
         //tick cycling
         loop {

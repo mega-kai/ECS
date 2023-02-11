@@ -13,13 +13,15 @@
 // only thing about query result is that it needs to be pregenerated before
 // execution phase, and only changed when the storage/system pool changed
 
-#[derive(Clone, Copy, Debug)]
-pub struct Query {
+use crate::component::*;
+
+#[derive(Debug)]
+pub struct Query<C: Component> {
     //should also be an intoiterator, sorting the data
-    access: (),
+    access: Vec<C>,
     filter: (),
 }
-impl Query {
+impl<C: Component> Query<C> {
     fn new() -> Self {
         todo!()
     }
