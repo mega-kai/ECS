@@ -1,9 +1,13 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 #![feature(alloc_layout_extra)]
+mod command_buffer;
 mod component;
+mod query;
 mod scheduler;
 mod storage;
+use command_buffer::*;
 use component::*;
+use query::*;
 use scheduler::*;
 use storage::*;
 
@@ -41,7 +45,7 @@ impl ECS {
     }
 
     /// a tick cycle consisting of multiple stages
-    pub fn next(&mut self) {
+    pub fn tick(&mut self) {
         //generating a new queue to be executed: queue generation stages
         //this is all side effects, internally mutating the queue field
         let order = self.scheduler.generate_queue_for_current_cycle();
@@ -80,42 +84,8 @@ mod test {
         command
     }
 
-    //something like Query<&mut Test, Without<Test2>>
-    struct Query<T, U> {
-        access: T,
-        filter: U,
-    }
-
-    trait SystemParam {}
-    impl SystemParam for Command {}
-    impl<T, U> SystemParam for Query<T, U> {}
-
-    //the number of syses depend on how many types of system parameters are there: Command, Query
-    trait SystemFunc {
-        fn run() {}
-    }
-    //dumb system
-    impl<F: FnMut()> SystemFunc for F {}
-
-    impl<Sys, F> SystemFunc for F
-    where
-        F: FnMut(Sys),
-        Sys: SystemParam,
-    {
-    }
-    impl<SysParam1: SystemParam, SysParam2: SystemParam> SystemFunc
-        for fn(SysParam1, SysParam2) -> Command
-    {
-    }
-
-    fn testtest(num: i32) {}
-
-    /// would take any system
-    fn take_system<Sys: SystemFunc>(system: Sys) {}
-
     #[test]
     fn ecs() {
-        take_system(testtest /* this is actually a function item */);
         //new ecs
         let mut ecs = ECS::new();
 
@@ -124,7 +94,7 @@ mod test {
 
         //tick cycling
         loop {
-            ecs.next();
+            ecs.tick();
         }
     }
 }

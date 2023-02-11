@@ -1,53 +1,8 @@
+//the scheduler and the executor
+use crate::command_buffer::*;
 use crate::component::*;
+use crate::query::*;
 use crate::storage::*;
-
-/// a command buffer for a single system, supplied to all systems upon
-/// execution, returned by that function to be collected within
-/// the main ECS::CommandBuffer;
-/// all commands here will only get executed at a later stage of a tick
-/// cycle, which is after the execution phase
-pub struct Command {}
-impl Command {
-    fn new() -> Self {
-        todo!()
-    }
-
-    pub fn spawn_component<C: Component>(&mut self, component: C) -> ComponentKey {
-        todo!()
-    }
-
-    //should you need an exclusive access to that component to destroy it??
-    pub fn destroy_component<C: Component>(&mut self, mut_access: &mut C) {}
-
-    /// perhaps the storage also stores linking information alongside with
-    /// the actual component data
-    pub fn link_component(&mut self, one: ComponentKey, another: ComponentKey) {}
-
-    pub fn unlink_component(&mut self) {}
-}
-
-/// a list of desired references with filter functionalities;
-/// part of the metadata, as with all other metadatas, it will be
-/// processed by the scheduler
-#[derive(Debug, Clone, Copy)]
-pub struct QueryList {}
-impl QueryList {
-    pub fn empty() -> Self {
-        Self {}
-    }
-}
-
-/// a single query result that can be iterated upon to get all the references
-/// to the components/entities
-pub struct QueryResult(/* a bunch of references to components */);
-impl QueryResult {
-    pub fn new() -> Self {
-        todo!()
-    }
-
-    pub fn does_things_with_the_result(&mut self) {}
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum ExecutionFrequency {
     Always,
@@ -120,6 +75,9 @@ impl Scheduler {
         QueryOrder::empty()
     }
 
+    /// when running a system, the only state changes are components data
+    /// with mutable access requested, all the commands will be executed
+    /// in batch after execution phase
     pub fn execute_all(&self) {
         for system in &self.queue {
             (system.fn_ptr)(Command::new(), QueryResult::new());

@@ -1,4 +1,6 @@
+//type erased storage
 use crate::component::*;
+use crate::query::*;
 use crate::scheduler::*;
 use std::{
     alloc::Layout,
