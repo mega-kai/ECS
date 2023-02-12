@@ -1,5 +1,5 @@
 //system level command buffer and ecs level command buffer
-use crate::component::*;
+use crate::{component::*, system::*};
 
 /// a command buffer for a single system, supplied to all systems upon
 /// execution, returned by that function to be collected within
@@ -26,6 +26,7 @@ impl Command {
 
     pub fn unlink_component(&mut self) {}
 }
+impl SysParam for Command {}
 
 //main command buffer
 pub struct CommandBuffer {}

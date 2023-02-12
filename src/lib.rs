@@ -115,12 +115,53 @@ mod test {
         let mut ecs = ECS::new();
 
         //add systems
-        ecs.add_system(SystemWithMetadata::default(empty_system));
+        ecs.add_system(SystemWithMetadata::once(spawn_player));
 
-        let mut thing: Box<dyn System> = Box::new(SystemWithMetadata::default(empty_system));
         //tick cycling
         loop {
             ecs.tick();
         }
     }
+
+    #[test]
+    fn storage() {
+        let mut vec = TypeErasedVec::new::<Player>();
+        let ptr0 = (&mut Player("pinita") as *mut Player).cast::<u8>();
+        let ptr1 = (&mut Player("kai") as *mut Player).cast::<u8>();
+        let ptr2 = (&mut Player("wolfter") as *mut Player).cast::<u8>();
+        vec.push(ptr0);
+        vec.push(ptr1);
+        vec.push(ptr2);
+        let thing0 = unsafe {
+            vec.get_ptr_from_index(0)
+                .unwrap()
+                .cast::<Player>()
+                .as_ref()
+                .unwrap()
+        };
+        let thing1 = unsafe {
+            vec.get_ptr_from_index(1)
+                .unwrap()
+                .cast::<Player>()
+                .as_ref()
+                .unwrap()
+        };
+        let thing2 = unsafe {
+            vec.get_ptr_from_index(2)
+                .unwrap()
+                .cast::<Player>()
+                .as_ref()
+                .unwrap()
+        };
+        println!("len:{}, cap:{}", vec.len(), vec.cap());
+        println!(
+            "first: {}, second: {}, third: {}",
+            thing0.0.to_uppercase(),
+            thing1.0.to_uppercase(),
+            thing2.0.to_uppercase()
+        );
+    }
+
+    #[test]
+    fn num() {}
 }

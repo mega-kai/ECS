@@ -21,12 +21,15 @@ impl SystemMetadata {
             execution_frequency: ExecutionFrequency::Always,
         }
     }
+    pub fn new(frequency: ExecutionFrequency) -> Self {
+        Self {
+            execution_frequency: frequency,
+        }
+    }
 }
 
 pub trait SysParam {}
 impl SysParam for () {}
-impl SysParam for Command {}
-//impl SysParam for Query {}
 impl<S1> SysParam for (S1,) where S1: SysParam {}
 impl<S1, S2> SysParam for (S1, S2)
 where
@@ -76,6 +79,13 @@ impl<Param: SysParam, Sys: SysFn<Param>> SystemWithMetadata<Param, Sys> {
     pub fn default(func: Sys) -> Self {
         Self {
             meta: SystemMetadata::default(),
+            func,
+            _marker: PhantomData,
+        }
+    }
+    pub fn once(func: Sys) -> Self {
+        Self {
+            meta: SystemMetadata::new(ExecutionFrequency::Once),
             func,
             _marker: PhantomData,
         }

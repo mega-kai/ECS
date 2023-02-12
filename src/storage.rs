@@ -10,32 +10,15 @@ use std::{
 };
 
 /// a type erased vector
-struct TypeErasedVec {
+pub(crate) struct TypeErasedVec {
     layout_of_component: Layout,
-    data_heap_ptr: NonNull<u8>,
+    data_heap_ptr: *mut u8,
     len: usize,
     capacity: usize,
 }
 impl TypeErasedVec {
     /// does not handle ZST
-    fn new<T>() -> Self {
-        assert!(
-            std::mem::size_of::<T>() != 0,
-            "{} is a ZST",
-            std::any::type_name::<T>()
-        );
-
-        let layout = Layout::new::<T>();
-        let val = Self {
-            layout_of_component: layout,
-            data_heap_ptr: layout.dangling(),
-            len: 0,
-            capacity: 0,
-        };
-        val
-    }
-
-    fn with_capacity<T>(size: NonZeroUsize) -> Self {
+    pub(crate) fn new<T>() -> Self {
         assert!(
             std::mem::size_of::<T>() != 0,
             "{} is a ZST",
@@ -45,62 +28,85 @@ impl TypeErasedVec {
         let layout = Layout::new::<T>();
         let mut val = Self {
             layout_of_component: layout,
-            data_heap_ptr: layout.dangling(),
+            data_heap_ptr: layout.dangling().as_ptr(),
             len: 0,
             capacity: 0,
         };
-        val.grow_capacity(size);
+        val.grow_capacity(unsafe { NonZeroUsize::new_unchecked(64) });
         val
     }
 
-    fn push(&mut self, ptr: NonNull<u8>, layout: Layout) {
-        assert_eq!(self.layout_of_component, layout);
-
+    pub(crate) fn push(&mut self, ptr: *mut u8) {
         if self.len >= self.capacity {
             //double the cap
             self.grow_capacity(unsafe { NonZeroUsize::new_unchecked(self.capacity) });
-            self.insert_from_ptr(self.len - 1, ptr);
+            unsafe {
+                self.raw_insert_from_ptr(self.len, ptr);
+            }
         } else {
-            self.insert_from_ptr(self.len - 1, ptr);
+            unsafe {
+                self.raw_insert_from_ptr(self.len, ptr);
+            }
         }
     }
 
     /// try to make sure this is only used to double the capacity
-    fn grow_capacity(&mut self, grow: NonZeroUsize) {
+    pub(crate) fn grow_capacity(&mut self, grow: NonZeroUsize) {
         let new_capacity = self.capacity + grow.get();
-        let (new_layout, _) = self
+        let (new_layout_of_whole_vec, _) = self
             .layout_of_component
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = if self.capacity == 0 {
-            unsafe { std::alloc::alloc(new_layout) }
+            unsafe { std::alloc::alloc(new_layout_of_whole_vec) }
         } else {
             unsafe {
                 std::alloc::realloc(
                     //starting at
-                    self.data_heap_ptr.as_ptr(),
+                    self.data_heap_ptr,
                     //the extent to uproot
                     self.layout_of_component
                         .repeat(self.capacity)
                         .expect("could not repeat layout")
                         .0,
                     //length of the new memory
-                    new_layout.size(),
+                    new_layout_of_whole_vec.size(),
                 )
             }
         };
         self.capacity = new_capacity;
-        self.data_heap_ptr = unsafe { NonNull::new_unchecked(new_data_ptr) };
+        self.data_heap_ptr = new_data_ptr;
     }
 
-    fn insert_from_ptr(&mut self, index: usize, ptr: NonNull<u8>) {
+    /// will overwrite the value if the index is taken
+    pub(crate) unsafe fn raw_insert_from_ptr(&mut self, index: usize, src_ptr: *mut u8) {
+        //check if index is valid
+        let raw_dst_ptr = self.get_ptr_from_index(index).expect("index overflow");
+        //memmove size() amount of bytes
+        std::ptr::copy(src_ptr, raw_dst_ptr, self.layout().size());
+        //incrememt the len
         self.len += 1;
     }
 
-    fn get(&self) {}
-    fn get_mut(&mut self) {}
-    fn remove(&mut self, index: usize) {}
-    fn swap(&mut self) {}
+    pub(crate) unsafe fn get_ptr_from_index(&self, index: usize) -> Option<*mut u8> {
+        if index > self.len {
+            None
+        } else {
+            Some(self.data_heap_ptr.add(index * self.layout().size()))
+        }
+    }
+
+    pub(crate) fn layout(&self) -> Layout {
+        self.layout_of_component
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn cap(&self) -> usize {
+        self.capacity
+    }
 }
 
 /// a type erased sparse set based consisted of a sparse vec and a dense vec
