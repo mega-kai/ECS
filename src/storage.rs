@@ -96,6 +96,16 @@ impl TypeErasedVec {
         }
     }
 
+    /// different from get_ptr_from_index as this is not for insertion,
+    /// this is for access
+    pub(crate) unsafe fn get(&self, index: usize) -> Option<*mut u8> {
+        if index >= self.len {
+            None
+        } else {
+            Some(self.data_heap_ptr.add(index * self.layout().size()))
+        }
+    }
+
     pub(crate) fn layout(&self) -> Layout {
         self.layout_of_component
     }
@@ -112,13 +122,17 @@ impl TypeErasedVec {
 /// a type erased sparse set based consisted of a sparse vec and a dense vec
 struct SparseSet {
     dense: TypeErasedVec,
-    //usize == TypeErasedVec.index,
+    //the usize is the index for dense, the index of sparse is the value from the key
     sparse: Vec<usize>,
 }
 impl SparseSet {
+    pub(crate) fn new() -> Self {
+        todo!()
+    }
+
     /// add a type erased component, returning its index value
     /// in the sparse vec
-    fn add(&mut self, ptr: NonNull<u8>) -> usize {
+    fn add(&mut self, ptr: *mut u8) -> usize {
         0
     }
 
@@ -147,17 +161,17 @@ pub struct Storage {
     data_hash: HashMap<ComponentID, SparseSet>,
 }
 impl Storage {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
         }
     }
 
-    pub fn add_component<C: Component>(&mut self, component: C) -> usize {
+    pub(crate) fn add_component<C: Component>(&mut self, component: C) -> usize {
         let id = component.id();
         let result = self.data_hash.get_mut(&id);
         if let Some(access) = result {
-            access.add(NonNull::dangling());
+            //access.add(NonNull::dangling().as_ptr());
             //add component
         } else {
             //create a new
@@ -165,7 +179,11 @@ impl Storage {
         0
     }
 
-    pub fn query(&mut self, query_request: ()) -> Option<()> {
+    pub(crate) fn add_to_existing_set(&mut self) {}
+
+    pub(crate) fn init_set(&mut self) {}
+
+    pub(crate) fn query(&mut self) -> Option<()> {
         todo!()
     }
 }

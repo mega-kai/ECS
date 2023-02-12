@@ -132,27 +132,9 @@ mod test {
         vec.push(ptr0);
         vec.push(ptr1);
         vec.push(ptr2);
-        let thing0 = unsafe {
-            vec.get_ptr_from_index(0)
-                .unwrap()
-                .cast::<Player>()
-                .as_ref()
-                .unwrap()
-        };
-        let thing1 = unsafe {
-            vec.get_ptr_from_index(1)
-                .unwrap()
-                .cast::<Player>()
-                .as_ref()
-                .unwrap()
-        };
-        let thing2 = unsafe {
-            vec.get_ptr_from_index(2)
-                .unwrap()
-                .cast::<Player>()
-                .as_ref()
-                .unwrap()
-        };
+        let thing0 = unsafe { vec.get(0).unwrap().cast::<Player>().as_ref().unwrap() };
+        let thing1 = unsafe { vec.get(1).unwrap().cast::<Player>().as_ref().unwrap() };
+        let thing2 = unsafe { vec.get(2).unwrap().cast::<Player>().as_ref().unwrap() };
         println!("len:{}, cap:{}", vec.len(), vec.cap());
         println!(
             "first: {}, second: {}, third: {}",
@@ -160,6 +142,9 @@ mod test {
             thing1.0.to_uppercase(),
             thing2.0.to_uppercase()
         );
+
+        //struct ZST;
+        //let mut zst_vec = TypeErasedVec::new::<ZST>();
     }
 
     #[test]
