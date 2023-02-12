@@ -26,12 +26,9 @@ impl Scheduler {
 
     pub fn add_system<Param: SysParam + 'static, Sys: SysFn<Param> + 'static>(
         &mut self,
-        func: Sys,
-        meta: SystemMetadata,
+        func: SystemWithMetadata<Param, Sys>,
     ) {
-        self.pool
-            .push(Box::new(SystemWithMetadata::new(func, meta)));
-        //toggle on the flag
+        self.pool.push(Box::new(func));
         self.updated = true;
     }
 

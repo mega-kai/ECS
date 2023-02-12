@@ -18,7 +18,7 @@ use system::*;
 /// execution cycle(within the same next() method) run, only one
 /// mutable reference to a single component can be issued,
 /// with that reference you can edit/delete that component
-struct ECS {
+pub struct ECS {
     //for all components (including all entities)
     storage: Storage,
     //for all systems along with their metadata
@@ -39,11 +39,11 @@ impl ECS {
         }
     }
 
-    pub fn add_system<Param: SysParam, Sys: SysFn<Param>>(
+    pub fn add_system<Param: SysParam + 'static, Sys: SysFn<Param> + 'static>(
         &mut self,
         func: SystemWithMetadata<Param, Sys>,
     ) {
-        //self.scheduler.add_system(func);
+        self.scheduler.add_system(func);
     }
 
     /// a tick cycle consisting of multiple stages
@@ -117,10 +117,12 @@ mod test {
         //add systems
         ecs.add_system(SystemWithMetadata::default(empty_system));
 
+        let mut thing: Box<dyn System> = Box::new(SystemWithMetadata::default(empty_system));
         //tick cycling
         loop {
             ecs.tick();
             //empty_system();
+            //thing.run(());
         }
     }
 }
