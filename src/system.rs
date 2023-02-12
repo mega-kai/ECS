@@ -23,7 +23,7 @@ impl SystemMetadata {
 
 pub trait SysParam {}
 impl SysParam for Command {}
-impl SysParam for Query {}
+//impl SysParam for Query {}
 impl<S1> SysParam for (S1,) where S1: SysParam {}
 impl<S1, S2> SysParam for (S1, S2)
 where

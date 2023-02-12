@@ -15,45 +15,38 @@
 
 use std::marker::PhantomData;
 
-use crate::component::*;
+use crate::{component::*, system::*};
 
-/// component marker
+/// access
 pub trait QueryMarker {}
+impl QueryMarker for () {}
 impl<T> QueryMarker for &T where T: Component {}
 impl<T> QueryMarker for &mut T where T: Component {}
+
+/// filters
+pub struct With<Q: QueryMarker> {
+    _data: PhantomData<Q>,
+}
+pub struct Without<Q: QueryMarker> {
+    _data: PhantomData<Q>,
+}
+
+pub trait QueryFilter {}
+impl QueryFilter for () {}
+impl<Q: QueryMarker> QueryFilter for With<Q> {}
+impl<Q: QueryMarker> QueryFilter for Without<Q> {}
 
 /// query request, which also can be turned
 /// into an iterator to get the access
 #[derive(Debug)]
-pub struct Query {
+pub struct Query<Access = (), Filter = ()>
+where
+    Access: QueryMarker,
+    Filter: QueryFilter,
+{
     /// consisted of multiple types
-    access: (),
-    filter: (),
+    access: Access,
+    filter: Filter,
 }
-impl Query {
-    pub fn new() {}
-}
-
-pub struct TestQuery<T, U> {
-    _1: PhantomData<T>,
-    _2: PhantomData<U>,
-}
-impl<T, U> TestQuery<T, U> {
-    fn new<A, B>() -> Self {
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Health(i32);
-impl Component for Health {}
-
-#[derive(Debug, Clone, Copy)]
-struct Mana(i32);
-impl Component for Mana {}
-
-#[derive(Debug, Clone, Copy)]
-struct Player(&'static str);
-impl Component for Player {}
-
-fn test() {}
+/// make this a valid system parameter
+impl<Access: QueryMarker, Filter: QueryFilter> SysParam for Query<Access, Filter> {}

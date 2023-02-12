@@ -105,17 +105,13 @@ mod test {
         command
     }
 
-    fn system_that_queries(mut query: Query) -> Command {
-        // for (writer, reader) in query {
-        // writer.write();
-        // reader.read();
-        // }
-        todo!()
-    }
     fn system_that_commands(mut command: Command) -> Command {
         todo!()
     }
-    fn system_that_does_both(mut command: Command, mut query: Query) -> Command {
+    fn system_that_does_both(
+        mut command: Command,
+        mut query: Query<&mut Health, With<&Player>>,
+    ) -> Command {
         todo!()
     }
 
