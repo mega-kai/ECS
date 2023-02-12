@@ -106,7 +106,7 @@ mod test {
     }
 
     fn empty_system() {
-        println!("test")
+        println!("uwu")
     }
 
     #[test]
@@ -121,8 +121,6 @@ mod test {
         //tick cycling
         loop {
             ecs.tick();
-            //empty_system();
-            //thing.run(());
         }
     }
 }
