@@ -39,13 +39,9 @@ impl ECS {
         }
     }
 
-    /// call the add_system on self.storage, essentially just pushing
-    /// the system object onto a vector of systems, while toggling a flag
-    /// that says a new system had been added
     pub fn add_system<Param: SysParam, Sys: SysFn<Param>>(
         &mut self,
-        func: Sys,
-        meta: SystemMetadata,
+        func: SystemWithMetadata<Param, Sys>,
     ) {
         //self.scheduler.add_system(func);
     }
@@ -54,7 +50,7 @@ impl ECS {
     pub fn tick(&mut self) {
         //generating a new queue to be executed: queue generation stages
         //this is all side effects, internally mutating the queue field
-        let order = self.scheduler.generate_queue_for_current_tick();
+        //let order = self.scheduler.generate_queue_for_current_tick();
 
         //supplying with all the requested query results: query stage
 
@@ -105,14 +101,12 @@ mod test {
         command
     }
 
-    fn system_that_commands(mut command: Command) -> Command {
+    fn system_test(mut command: Command, mut query: Query<&mut Health, With<&Player>>) -> Command {
         todo!()
     }
-    fn system_that_does_both(
-        mut command: Command,
-        mut query: Query<&mut Health, With<&Player>>,
-    ) -> Command {
-        todo!()
+
+    fn empty_system() {
+        println!("test")
     }
 
     #[test]
@@ -121,11 +115,12 @@ mod test {
         let mut ecs = ECS::new();
 
         //add systems
-        ecs.add_system(system_that_does_both, SystemMetadata::default());
+        ecs.add_system(SystemWithMetadata::default(empty_system));
 
         //tick cycling
         loop {
             ecs.tick();
+            //empty_system();
         }
     }
 }

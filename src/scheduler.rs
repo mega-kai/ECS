@@ -1,3 +1,5 @@
+use std::any::Any;
+
 //the scheduler and the executor
 use crate::command_buffer::*;
 use crate::component::*;
@@ -10,8 +12,8 @@ pub struct Scheduler {
     //toggle this flag on when ECS::add_system invoked
     //toggle this flag off when a new queue is generated once
     updated: bool,
-    pool: Vec<SystemMetadata>,
-    queue: Vec<SystemMetadata>,
+    pool: Vec<Box<dyn System>>,
+    queue: Vec<Box<dyn System>>,
 }
 impl Scheduler {
     pub fn new() -> Self {
@@ -22,9 +24,14 @@ impl Scheduler {
         }
     }
 
-    pub fn add_system(&mut self, func: SystemMetadata) {
-        //hoops the run thru before
-        self.pool.push(func);
+    pub fn add_system<Param: SysParam + 'static, Sys: SysFn<Param> + 'static>(
+        &mut self,
+        func: Sys,
+        meta: SystemMetadata,
+    ) {
+        self.pool
+            .push(Box::new(SystemWithMetadata::new(func, meta)));
+        //toggle on the flag
         self.updated = true;
     }
 
@@ -42,9 +49,9 @@ impl Scheduler {
     /// when running a system, the only state changes are components data
     /// with mutable access requested, all the commands will be executed
     /// in batch after execution phase
-    pub fn execute_all(&self) {
-        for system in &self.queue {
-            //(system.fn_ptr)(Command::new(), ());
+    pub fn execute_all(&mut self) {
+        for system in &mut self.pool {
+            system.run(());
         }
     }
 }
