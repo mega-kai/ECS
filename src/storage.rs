@@ -130,13 +130,17 @@ impl SparseSet {
 
     /// add a type erased component, returning its index value
     /// in the sparse vec
-    fn add(&mut self, ptr: *mut u8) -> usize {
-        0
+    fn add(&mut self, ptr: *mut u8, index: usize) {
+        self.ensure_sparse_length(index);
+    }
+
+    fn ensure_sparse_length(&mut self, index: usize) {
+        if self.sparse.len() <= index {}
     }
 
     /// remove both the content in the sparse vec and the dense
     /// vec according to the index
-    fn remove(&mut self, index: usize) -> *mut u8 {
+    fn remove(&mut self, index: usize) {
         todo!()
     }
 
@@ -150,28 +154,39 @@ impl SparseSet {
 /// a hash map of ComponentIDs as keys and SparseSets as values
 /// functioning as a central hub for adding/accessing stored components;
 /// there will be a sparse set just for the entities, which are composed
-/// of keys that can access it's components
+/// of keys that can access it's components;
+///
+/// also manages free id number(key index) and generation
 pub struct Storage {
     // no repeating items
     data_hash: HashMap<ComponentID, SparseSet>,
+    free_component_id_index: usize,
 }
 impl Storage {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
+            free_component_id_index: 0,
         }
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        let id = component.id();
-        if self.check_id_validity(id) {
-            let access = self.data_hash.get_mut(&id).unwrap();
+        let comp_id = component.id();
+        let free_index = self.get_new_free_index();
+        if self.check_id_validity(comp_id) {
+            let access = self.data_hash.get_mut(&comp_id).unwrap();
             let ptr = (&mut component as *mut C).cast::<u8>();
-            return ComponentKey::new::<C>(access.add(ptr));
+            let key = ComponentKey::new::<C>(free_index);
+            access.add(ptr, free_index);
+            //with the next index number, and a generation of 0
+            return key;
         } else {
             let access = self.init_set::<C>();
             let ptr = (&mut component as *mut C).cast::<u8>();
-            return ComponentKey::new::<C>(access.add(ptr));
+            let key = ComponentKey::new::<C>(free_index);
+            access.add(ptr, free_index);
+            //with the next index number, and a generation of 0
+            return key;
         }
     }
 
@@ -184,5 +199,18 @@ impl Storage {
         let layout = Layout::new::<C>();
         self.data_hash.insert(id, SparseSet::new(layout));
         self.data_hash.get_mut(&id).unwrap()
+    }
+
+    pub(crate) fn get<'a, C: Component>(&self, key: ComponentKey) -> &'a C {
+        todo!()
+    }
+
+    pub(crate) fn get_new_free_index(&mut self) -> usize {
+        self.free_component_id_index += 1;
+        self.free_component_id_index - 1
+    }
+
+    pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> C {
+        todo!()
     }
 }

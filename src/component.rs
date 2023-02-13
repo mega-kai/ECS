@@ -8,16 +8,16 @@ use std::{
 
 /// a key to access a component, which includes entities and child entities
 #[derive(Debug, Clone, Copy)]
-pub struct ComponentKey {
-    index: usize,
-    generation: usize,
-    ty: ComponentID,
+pub(crate) struct ComponentKey {
+    pub(crate) index: usize,
+    //generation: usize,
+    pub(crate) ty: ComponentID,
 }
 impl ComponentKey {
     pub(crate) fn new<C: Component>(index: usize) -> Self {
         Self {
             index: index,
-            generation: 0,
+            //generation: 0,
             ty: ComponentID::new::<C>(),
         }
     }
