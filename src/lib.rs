@@ -63,6 +63,8 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
+    use std::alloc::Layout;
+
     use super::*;
 
     #[derive(Debug, Clone, Copy)]
@@ -115,7 +117,7 @@ mod test {
         let mut ecs = ECS::new();
 
         //add systems
-        ecs.add_system(SystemWithMetadata::once(spawn_player));
+        ecs.add_system(SystemWithMetadata::once(empty_system));
 
         //tick cycling
         loop {
@@ -125,7 +127,8 @@ mod test {
 
     #[test]
     fn storage() {
-        let mut vec = TypeErasedVec::new::<Player>();
+        println!("{}", Layout::new::<Player>().size());
+        let mut vec = TypeErasedVec::new(Layout::new::<Player>());
         let ptr0 = (&mut Player("pinita") as *mut Player).cast::<u8>();
         let ptr1 = (&mut Player("kai") as *mut Player).cast::<u8>();
         let ptr2 = (&mut Player("wolfter") as *mut Player).cast::<u8>();

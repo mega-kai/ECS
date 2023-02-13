@@ -18,14 +18,9 @@ pub(crate) struct TypeErasedVec {
 }
 impl TypeErasedVec {
     /// does not handle ZST
-    pub(crate) fn new<T>() -> Self {
-        assert!(
-            std::mem::size_of::<T>() != 0,
-            "{} is a ZST",
-            std::any::type_name::<T>()
-        );
+    pub(crate) fn new(layout: Layout) -> Self {
+        assert!(layout.size() != 0, "type is a ZST",);
 
-        let layout = Layout::new::<T>();
         let mut val = Self {
             layout_of_component: layout,
             data_heap_ptr: layout.dangling().as_ptr(),
@@ -120,14 +115,17 @@ impl TypeErasedVec {
 }
 
 /// a type erased sparse set based consisted of a sparse vec and a dense vec
-struct SparseSet {
+pub(crate) struct SparseSet {
     dense: TypeErasedVec,
     //the usize is the index for dense, the index of sparse is the value from the key
-    sparse: Vec<usize>,
+    sparse: Vec<Option<usize>>,
 }
 impl SparseSet {
-    pub(crate) fn new() -> Self {
-        todo!()
+    pub(crate) fn new(layout: Layout) -> Self {
+        Self {
+            dense: TypeErasedVec::new(layout),
+            sparse: vec![None; 64],
+        }
     }
 
     /// add a type erased component, returning its index value
@@ -138,17 +136,14 @@ impl SparseSet {
 
     /// remove both the content in the sparse vec and the dense
     /// vec according to the index
-    fn remove(&mut self, index: usize) {}
+    fn remove(&mut self, index: usize) -> *mut u8 {
+        todo!()
+    }
 
     /// get a pointer to that type erased component's address in the dense
     /// construct it back to a &C with the queried type layout
-    fn get() -> *const u8 {
-        null()
-    }
-
-    /// same with get() but ultimately returns a &mut C
-    fn get_mut() -> *mut u8 {
-        null::<u8>() as *mut _
+    fn get() -> *mut u8 {
+        todo!()
     }
 }
 
@@ -167,23 +162,27 @@ impl Storage {
         }
     }
 
-    pub(crate) fn add_component<C: Component>(&mut self, component: C) -> usize {
+    pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
         let id = component.id();
-        let result = self.data_hash.get_mut(&id);
-        if let Some(access) = result {
-            //access.add(NonNull::dangling().as_ptr());
-            //add component
+        if self.check_id_validity(id) {
+            let access = self.data_hash.get_mut(&id).unwrap();
+            let ptr = (&mut component as *mut C).cast::<u8>();
+            return ComponentKey::new::<C>(access.add(ptr));
         } else {
-            //create a new
+            let access = self.init_set::<C>();
+            let ptr = (&mut component as *mut C).cast::<u8>();
+            return ComponentKey::new::<C>(access.add(ptr));
         }
-        0
     }
 
-    pub(crate) fn add_to_existing_set(&mut self) {}
+    pub(crate) fn check_id_validity(&mut self, id: ComponentID) -> bool {
+        self.data_hash.get_mut(&id).is_some()
+    }
 
-    pub(crate) fn init_set(&mut self) {}
-
-    pub(crate) fn query(&mut self) -> Option<()> {
-        todo!()
+    pub(crate) fn init_set<C: Component>(&mut self) -> &mut SparseSet {
+        let id = ComponentID::new::<C>();
+        let layout = Layout::new::<C>();
+        self.data_hash.insert(id, SparseSet::new(layout));
+        self.data_hash.get_mut(&id).unwrap()
     }
 }

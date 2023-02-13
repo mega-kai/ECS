@@ -13,12 +13,29 @@ pub struct ComponentKey {
     generation: usize,
     ty: ComponentID,
 }
+impl ComponentKey {
+    pub(crate) fn new<C: Component>(index: usize) -> Self {
+        Self {
+            index: index,
+            generation: 0,
+            ty: ComponentID::new::<C>(),
+        }
+    }
+}
 
 /// ID used for comparing component types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
     name: &'static str,
     id: TypeId,
+}
+impl ComponentID {
+    pub(crate) fn new<C: Component>() -> Self {
+        Self {
+            name: type_name::<C>(),
+            id: TypeId::of::<C>(),
+        }
+    }
 }
 
 /// marker trait for components
