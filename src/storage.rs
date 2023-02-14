@@ -2,6 +2,7 @@
 use crate::component::*;
 use crate::query::*;
 use crate::scheduler::*;
+use std::marker::PhantomData;
 use std::{
     alloc::Layout,
     collections::HashMap,
@@ -93,11 +94,11 @@ impl TypeErasedVec {
 
     /// different from get_ptr_from_index as this is not for insertion,
     /// this is for access
-    pub(crate) unsafe fn get(&self, index: usize) -> Option<*mut u8> {
+    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &str> {
         if index >= self.len {
-            None
+            Err("index overflow in dense vec")
         } else {
-            Some(self.data_heap_ptr.add(index * self.layout().size()))
+            Ok(self.data_heap_ptr.add(index * self.layout().size()))
         }
     }
 
@@ -131,11 +132,22 @@ impl SparseSet {
     /// add a type erased component, returning its index value
     /// in the sparse vec
     fn add(&mut self, ptr: *mut u8, index: usize) {
-        self.ensure_sparse_length(index);
+        self.ensure_sparse_length_by_doubling(index);
+
+        if self.sparse[index].is_some() {
+            panic!("this index poisition shouldn't be overwritten");
+        } else {
+            self.dense.push(ptr);
+            self.sparse[index] = Some(self.dense.len() - 1);
+            //sparse[key.index] = dense_value_index
+        }
     }
 
-    fn ensure_sparse_length(&mut self, index: usize) {
-        if self.sparse.len() <= index {}
+    fn ensure_sparse_length_by_doubling(&mut self, index: usize) {
+        if self.sparse.len() < index {
+            //the only way the expand self.sparse, and it will always be 64^n
+            self.sparse.append(&mut vec![None; self.sparse.len()]);
+        }
     }
 
     /// remove both the content in the sparse vec and the dense
@@ -146,8 +158,12 @@ impl SparseSet {
 
     /// get a pointer to that type erased component's address in the dense
     /// construct it back to a &C with the queried type layout
-    fn get() -> *mut u8 {
-        todo!()
+    fn get(&self, index: usize) -> Result<*mut u8, &str> {
+        unsafe {
+            let sparse_result = self.sparse[index].ok_or("invalid sparse index")?;
+            let dense_result = self.dense.get(sparse_result)?;
+            Ok(dense_result)
+        }
     }
 }
 
@@ -162,6 +178,8 @@ pub struct Storage {
     data_hash: HashMap<ComponentID, SparseSet>,
     free_component_id_index: usize,
 }
+
+/// basic storage api
 impl Storage {
     pub(crate) fn new() -> Self {
         Self {
@@ -171,7 +189,7 @@ impl Storage {
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        let comp_id = component.id();
+        let comp_id = C::id();
         let free_index = self.get_new_free_index();
         if self.check_id_validity(comp_id) {
             let access = self.data_hash.get_mut(&comp_id).unwrap();
@@ -188,10 +206,12 @@ impl Storage {
             //with the next index number, and a generation of 0
             return key;
         }
+
+        //the component itself will be dropped after here
     }
 
-    pub(crate) fn check_id_validity(&mut self, id: ComponentID) -> bool {
-        self.data_hash.get_mut(&id).is_some()
+    pub(crate) fn check_id_validity(&self, id: ComponentID) -> bool {
+        self.data_hash.get(&id).is_some()
     }
 
     pub(crate) fn init_set<C: Component>(&mut self) -> &mut SparseSet {
@@ -201,8 +221,20 @@ impl Storage {
         self.data_hash.get_mut(&id).unwrap()
     }
 
-    pub(crate) fn get<'a, C: Component>(&self, key: ComponentKey) -> &'a C {
-        todo!()
+    pub(crate) fn retrieve<'a, C: Component>(
+        &mut self,
+        key: ComponentKey,
+    ) -> Result<&'a mut C, &str> {
+        if C::id() != key.id() {
+            return Err("generic and the key don't match");
+        }
+        if self.check_id_validity(key.id()) {
+            let access = self.data_hash.get_mut(&key.id()).unwrap();
+            unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
+        } else {
+            // no such key pair in the storage
+            Err("no such type of component stored")
+        }
     }
 
     pub(crate) fn get_new_free_index(&mut self) -> usize {
@@ -210,7 +242,8 @@ impl Storage {
         self.free_component_id_index - 1
     }
 
-    pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> C {
-        todo!()
+    pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
+        let result = self.retrieve::<C>(key)?;
+        Ok(C::to_owned(result))
     }
 }

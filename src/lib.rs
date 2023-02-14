@@ -126,7 +126,8 @@ mod test {
     }
 
     #[test]
-    fn storage() {
+    fn type_erased_vec_push() {
+        // test push()
         println!("{}", Layout::new::<Player>().size());
         let mut vec = TypeErasedVec::new(Layout::new::<Player>());
         let ptr0 = (&mut Player("pinita") as *mut Player).cast::<u8>();
@@ -145,11 +146,68 @@ mod test {
             thing1.0.to_uppercase(),
             thing2.0.to_uppercase()
         );
+        assert_eq!(thing0.0, "pinita");
+        assert_eq!(thing1.0, "kai");
+        assert_eq!(thing2.0, "wolfter");
+    }
 
+    #[test]
+    fn zst() {
+        // making sure ZST is rejected
         //struct ZST;
         //let mut zst_vec = TypeErasedVec::new::<ZST>();
     }
 
     #[test]
-    fn num() {}
+    fn type_erased_vec_capacity_grow() {
+        // testing the realloc and capacity growth
+        let mut vec_alloc = TypeErasedVec::new(Layout::new::<Player>());
+        for i in 0..65 {
+            vec_alloc.push((&mut Player("test") as *mut Player).cast::<u8>());
+            print!("current index: {}, value: {}", i, unsafe {
+                vec_alloc
+                    .get(0)
+                    .unwrap()
+                    .cast::<Player>()
+                    .as_ref()
+                    .unwrap()
+                    .0
+            })
+        }
+        assert_eq!(vec_alloc.len(), 65);
+        assert_eq!(vec_alloc.cap(), 128);
+    }
+
+    #[test]
+    fn storage_store_retrieve_remove() {
+        let mut storage = Storage::new();
+        let key = storage.add_component(Player("test storage"));
+        assert_eq!(storage.retrieve::<Player>(key).unwrap().0, "test storage");
+
+        //not match
+        let err_non_match = storage.retrieve::<Player>(
+            //some random key that is invalid
+            ComponentKey {
+                index: 2,
+                ty: Mana::id(),
+            },
+        );
+        assert_eq!(err_non_match.is_err(), true);
+        println!("{}", err_non_match.unwrap_err());
+
+        //wrong index
+        let err_wrong_index = storage.retrieve::<Player>(
+            //some random key that is invalid
+            ComponentKey {
+                //the index of the sparse vec would be none
+                index: 10,
+                ty: Player::id(),
+            },
+        );
+        assert_eq!(err_wrong_index.is_err(), true);
+        println!("{}", err_wrong_index.unwrap_err());
+
+        //remove functionality
+        //let result = todo!();
+    }
 }

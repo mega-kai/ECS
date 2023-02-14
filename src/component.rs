@@ -8,7 +8,7 @@ use std::{
 
 /// a key to access a component, which includes entities and child entities
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ComponentKey {
+pub struct ComponentKey {
     pub(crate) index: usize,
     //generation: usize,
     pub(crate) ty: ComponentID,
@@ -16,18 +16,25 @@ pub(crate) struct ComponentKey {
 impl ComponentKey {
     pub(crate) fn new<C: Component>(index: usize) -> Self {
         Self {
-            index: index,
+            index,
             //generation: 0,
             ty: ComponentID::new::<C>(),
         }
+    }
+
+    pub(crate) fn id(&self) -> ComponentID {
+        self.ty
+    }
+    pub(crate) fn index(&self) -> usize {
+        self.index
     }
 }
 
 /// ID used for comparing component types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
-    name: &'static str,
-    id: TypeId,
+    pub(crate) name: &'static str,
+    pub(crate) id: TypeId,
 }
 impl ComponentID {
     pub(crate) fn new<C: Component>() -> Self {
@@ -41,7 +48,7 @@ impl ComponentID {
 /// marker trait for components
 /// TODO! proc macro derive
 pub trait Component: Copy + Clone + 'static {
-    fn id(&self) -> ComponentID {
+    fn id() -> ComponentID {
         ComponentID {
             name: type_name::<Self>(),
             id: TypeId::of::<Self>(),

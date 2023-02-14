@@ -15,7 +15,7 @@
 
 use std::marker::PhantomData;
 
-use crate::{component::*, system::*};
+use crate::{component::*, storage::*, system::*};
 
 /// access
 pub trait QueryMarker {}
@@ -50,3 +50,16 @@ where
 }
 /// make this a valid system parameter
 impl<Access: QueryMarker, Filter: QueryFilter> SysParam for Query<Access, Filter> {}
+
+/// iter
+pub struct QueryResult<Q: QueryMarker> {
+    _marker: PhantomData<Q>,
+}
+
+/// these are maybe for queries
+impl Storage {
+    /// would return an iterator
+    fn query<Q: QueryMarker>(&self) -> QueryResult<Q> {
+        todo!()
+    }
+}
