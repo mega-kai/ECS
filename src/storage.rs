@@ -113,6 +113,8 @@ impl TypeErasedVec {
     pub(crate) fn cap(&self) -> usize {
         self.capacity
     }
+
+    pub(crate) fn delete(&mut self, index: usize) {}
 }
 
 /// a type erased sparse set based consisted of a sparse vec and a dense vec
@@ -235,7 +237,17 @@ impl Storage {
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
-        let result = self.retrieve::<C>(key)?;
-        Ok(C::to_owned(result))
+        let access = self.retrieve::<C>(key)?;
+        let val = access.clone();
+        drop(access);
+
+        self.try_gaining_access(key.id())
+            .unwrap()
+            .remove(key.index());
+        //now delete the thing
+        //for rn if a sparse set is empty it won't get deleted in the hash map
+        //delete sparse element, then delete
+        //
+        Ok(val)
     }
 }
