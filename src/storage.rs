@@ -189,29 +189,26 @@ impl Storage {
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        let comp_id = C::id();
         let free_index = self.get_new_free_index();
-        if self.check_id_validity(comp_id) {
-            let access = self.data_hash.get_mut(&comp_id).unwrap();
-            let ptr = (&mut component as *mut C).cast::<u8>();
-            let key = ComponentKey::new::<C>(free_index);
-            access.add(ptr, free_index);
-            //with the next index number, and a generation of 0
-            return key;
-        } else {
-            let access = self.init_set::<C>();
-            let ptr = (&mut component as *mut C).cast::<u8>();
-            let key = ComponentKey::new::<C>(free_index);
-            access.add(ptr, free_index);
-            //with the next index number, and a generation of 0
-            return key;
+        match self.try_gaining_access(C::id()) {
+            Ok(access) => {
+                //which is essentially a memcpy
+                access.add((&mut component as *mut C).cast::<u8>(), free_index);
+                ComponentKey::new::<C>(free_index)
+            }
+            Err(_) => {
+                let access = self.init_set::<C>();
+                access.add((&mut component as *mut C).cast::<u8>(), free_index);
+                ComponentKey::new::<C>(free_index)
+            }
         }
-
-        //the component itself will be dropped after here
+        //the component itself will be dropped here
     }
 
-    pub(crate) fn check_id_validity(&self, id: ComponentID) -> bool {
-        self.data_hash.get(&id).is_some()
+    pub(crate) fn try_gaining_access(&mut self, id: ComponentID) -> Result<&mut SparseSet, &str> {
+        self.data_hash
+            .get_mut(&id)
+            .ok_or("no such type of component stored")
     }
 
     pub(crate) fn init_set<C: Component>(&mut self) -> &mut SparseSet {
@@ -228,13 +225,8 @@ impl Storage {
         if C::id() != key.id() {
             return Err("generic and the key don't match");
         }
-        if self.check_id_validity(key.id()) {
-            let access = self.data_hash.get_mut(&key.id()).unwrap();
-            unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
-        } else {
-            // no such key pair in the storage
-            Err("no such type of component stored")
-        }
+        let access = self.try_gaining_access(key.id())?;
+        unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
     }
 
     pub(crate) fn get_new_free_index(&mut self) -> usize {
