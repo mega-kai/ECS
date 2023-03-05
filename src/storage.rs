@@ -114,20 +114,54 @@ impl TypeErasedVec {
         self.capacity
     }
 
-    pub(crate) fn delete(&mut self, index: usize) {}
+    pub(crate) fn pop_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
+        unsafe {
+            let result = self
+                .get(index)?
+                .cast::<C>()
+                .as_mut()
+                .cloned()
+                .ok_or("could not get the component");
+            //you don't actually reset the data, you just make sure this slot is seen as available, so
+            //it can be overwritten
+            result
+        }
+    }
+}
+
+struct SparseVec {
+    content: Vec<Option<usize>>,
+    /// a collection of free spaces that will point to a None in content
+    free_head: Vec<usize>,
+}
+impl SparseVec {
+    pub(crate) fn new() -> Self {
+        Self {
+            content: vec![None; 64],
+            //if empty
+            free_head: vec![],
+        }
+    }
+
+    pub(crate) fn write(&mut self, index: usize, stuff_to_overwrite: Option<usize>) {
+        todo!()
+    }
+    pub(crate) fn access(&self, index: usize) -> Option<usize> {
+        todo!()
+    }
 }
 
 /// a type erased sparse set based consisted of a sparse vec and a dense vec
 pub(crate) struct SparseSet {
     dense: TypeErasedVec,
     //the usize is the index for dense, the index of sparse is the value from the key
-    sparse: Vec<Option<usize>>,
+    sparse: SparseVec,
 }
 impl SparseSet {
     pub(crate) fn new(layout: Layout) -> Self {
         Self {
             dense: TypeErasedVec::new(layout),
-            sparse: vec![None; 64],
+            sparse: SparseVec::new(),
         }
     }
 
@@ -136,33 +170,38 @@ impl SparseSet {
     fn add(&mut self, ptr: *mut u8, index: usize) {
         self.ensure_sparse_length_by_doubling(index);
 
-        if self.sparse[index].is_some() {
+        if self.sparse.access(index).is_some() {
             panic!("this index poisition shouldn't be overwritten");
         } else {
             self.dense.push(ptr);
-            self.sparse[index] = Some(self.dense.len() - 1);
+            self.sparse.write(index, Some(self.dense.len() - 1));
             //sparse[key.index] = dense_value_index
         }
     }
 
     fn ensure_sparse_length_by_doubling(&mut self, index: usize) {
-        if self.sparse.len() < index {
+        if self.sparse.content.len() < index {
             //the only way the expand self.sparse, and it will always be 64^n
-            self.sparse.append(&mut vec![None; self.sparse.len()]);
+            self.sparse
+                .content
+                .append(&mut vec![None; self.sparse.content.len()]);
         }
     }
 
     /// remove both the content in the sparse vec and the dense
     /// vec according to the index
-    fn remove(&mut self, index: usize) {
-        todo!()
+    fn remove_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
+        let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
+        //reset sparse
+        self.sparse.write(index, None);
+        self.dense.pop_as(sparse_result)
     }
 
     /// get a pointer to that type erased component's address in the dense
     /// construct it back to a &C with the queried type layout
     fn get(&self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
-            let sparse_result = self.sparse[index].ok_or("invalid sparse index")?;
+            let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
             let dense_result = self.dense.get(sparse_result)?;
             Ok(dense_result)
         }
@@ -220,10 +259,7 @@ impl Storage {
         self.data_hash.get_mut(&id).unwrap()
     }
 
-    pub(crate) fn retrieve<'a, C: Component>(
-        &mut self,
-        key: ComponentKey,
-    ) -> Result<&'a mut C, &str> {
+    pub(crate) fn retrieve<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &str> {
         if C::id() != key.id() {
             return Err("generic and the key don't match");
         }
@@ -237,17 +273,7 @@ impl Storage {
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
-        let access = self.retrieve::<C>(key)?;
-        let val = access.clone();
-        drop(access);
-
-        self.try_gaining_access(key.id())
-            .unwrap()
-            .remove(key.index());
-        //now delete the thing
-        //for rn if a sparse set is empty it won't get deleted in the hash map
-        //delete sparse element, then delete
-        //
-        Ok(val)
+        let access = self.try_gaining_access(key.id())?;
+        todo!()
     }
 }

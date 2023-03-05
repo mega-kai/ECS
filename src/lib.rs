@@ -120,9 +120,9 @@ mod test {
         ecs.add_system(SystemWithMetadata::once(empty_system));
 
         //tick cycling
-        loop {
-            ecs.tick();
-        }
+        //loop {
+        ecs.tick();
+        //}
     }
 
     #[test]
