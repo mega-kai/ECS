@@ -32,9 +32,9 @@ impl VecHelperFunc for Vec<Status> {
     }
 }
 
-#[derive(Clone, PartialEq)]
-enum Status {
-    Ocupied,
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Status {
+    Occupied,
     Empty,
 }
 
@@ -44,7 +44,7 @@ pub(crate) struct TypeErasedVec {
     capacity: usize,
 
     // one to one correspondence, basically a bit set
-    flags: Vec<Status>,
+    pub(crate) flags: Vec<Status>,
 }
 impl TypeErasedVec {
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
@@ -62,6 +62,7 @@ impl TypeErasedVec {
     // add to the first entry that is None
     pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
         let index = self.flags.get_first(Status::Empty).unwrap();
+        self.flags[index] = Status::Occupied;
         if index >= self.capacity {
             self.double_cap();
             self.flags.double_cap();
@@ -72,8 +73,7 @@ impl TypeErasedVec {
                 .add(index * self.layout_of_component.size());
             std::ptr::copy(ptr, raw_dst_ptr, self.layout_of_component.size());
         }
-
-        todo!()
+        index
     }
 
     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
@@ -88,14 +88,16 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) unsafe fn remove(&mut self, index: usize) -> Result<*mut u8, &'static str> {
+    pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &'static str> {
         if index >= self.capacity {
             Err("index overflow in dense vec")
         } else {
             self.flags[index] = Status::Empty;
-            Ok(self
-                .data_heap_ptr
-                .add(index * self.layout_of_component.size()))
+            unsafe {
+                Ok(self
+                    .data_heap_ptr
+                    .add(index * self.layout_of_component.size()))
+            }
         }
     }
 

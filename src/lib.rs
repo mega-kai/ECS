@@ -113,12 +113,56 @@ mod test {
 
     #[test]
     fn type_erased_vec() {
-        let mut player1 = Player("player 1");
         let mut vec = TypeErasedVec::new(Layout::new::<Player>(), 16);
 
-        // add & get
+        // add/get first one
+        let mut player0 = Player("player 0");
+        let index0 = vec.add((&mut player0 as *mut Player) as *mut u8);
+        let ref0 = unsafe { vec.get(index0).unwrap().cast::<Player>().as_mut().unwrap() };
+        assert_eq!(ref0.0, player0.0);
+
+        // add/get second one
+        let mut player1 = Player("player 1");
         let index1 = vec.add((&mut player1 as *mut Player) as *mut u8);
-        let thing = unsafe { vec.get(index1).unwrap().cast::<Player>().as_mut().unwrap() };
-        assert_eq!(thing.0, "player 1");
+        let ref1 = unsafe { vec.get(index1).unwrap().cast::<Player>().as_mut().unwrap() };
+        assert_eq!(ref1.0, player1.0);
+
+        // remove the first one
+        let ref_remove0 = unsafe {
+            vec.remove(index0)
+                .unwrap()
+                .cast::<Player>()
+                .as_mut()
+                .unwrap()
+        };
+        assert_eq!(ref_remove0.0, player0.0);
+
+        println!("-------------------------------------");
+        println!(
+            "the string removed from the vec at index {} is {}\n",
+            index0, ref_remove0.0
+        );
+        println!(
+            "the whole bit set is {:?}\n\nand only the second one should be occupied",
+            vec.flags
+        );
+        println!("-------------------------------------");
+
+        // add a third which should be at index 0
+        let mut player2 = Player("player 2");
+        let index2 = vec.add((&mut player2 as *mut Player) as *mut u8);
+        let ref2 = unsafe { vec.get(index2).unwrap().cast::<Player>().as_mut().unwrap() };
+        assert_eq!(ref2.0, player2.0);
+
+        println!("-------------------------------------");
+        println!(
+            "the string removed from the vec at index {} is {}\n",
+            index0, ref_remove0.0
+        );
+        println!(
+            "the whole bit set is {:?}\n\nand first two should both be occupied",
+            vec.flags
+        );
+        println!("-------------------------------------");
     }
 }
