@@ -15,8 +15,8 @@ trait VecHelperFunc {
     fn double_cap(&mut self);
 }
 
-impl VecHelperFunc for Vec<Option<usize>> {
-    type Target = Option<usize>;
+impl VecHelperFunc for Vec<Status> {
+    type Target = Status;
 
     fn get_first(&self, target: &<Self as VecHelperFunc>::Target) -> Option<usize> {
         for (index, val) in self.iter().enumerate() {
@@ -28,8 +28,14 @@ impl VecHelperFunc for Vec<Option<usize>> {
     }
 
     fn double_cap(&mut self) {
-        self.resize(self.len() * 2, None);
+        self.resize(self.len() * 2, Status::Empty);
     }
+}
+
+#[derive(Clone, PartialEq)]
+enum Status {
+    Ocupied,
+    Empty,
 }
 
 pub(crate) struct TypeErasedVec {
@@ -37,6 +43,9 @@ pub(crate) struct TypeErasedVec {
     data_heap_ptr: *mut u8,
     len: usize,
     capacity: usize,
+
+    // one to one correspondence, basically a bit set
+    flags: Vec<Status>,
 }
 impl TypeErasedVec {
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
@@ -48,6 +57,7 @@ impl TypeErasedVec {
             data_heap_ptr,
             len: 0,
             capacity: size,
+            flags: vec![Status::Empty; size],
         }
     }
 
@@ -80,6 +90,7 @@ impl TypeErasedVec {
         if index >= self.len {
             Err("index overflow in dense vec")
         } else {
+            self.flags[index] = Status::Empty;
             Ok(self
                 .data_heap_ptr
                 .add(index * self.layout_of_component.size()))
@@ -137,10 +148,10 @@ impl Storage {
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        let num = self
-            .ensure_access::<C>()
-            .add((&mut component as *mut C).cast::<u8>());
-        ComponentKey::new::<C>(num)
+        ComponentKey::new::<C>(
+            self.ensure_access::<C>()
+                .add((&mut component as *mut C).cast::<u8>()),
+        )
     }
 
     pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &'static str> {
