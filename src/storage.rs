@@ -108,47 +108,6 @@ impl TypeErasedVec {
     pub(crate) fn cap(&self) -> usize {
         self.capacity
     }
-
-    pub(crate) fn get_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
-        unsafe {
-            self.get_raw_ptr(index)?
-                .cast::<C>()
-                .as_mut()
-                .cloned()
-                .ok_or("could not get the component")
-        }
-    }
-}
-
-struct SparseVec {
-    content: Vec<Option<usize>>,
-    free_head: Vec<bool>,
-}
-impl SparseVec {
-    pub(crate) fn new() -> Self {
-        Self {
-            content: vec![None; 64],
-            free_head: vec![true; 64],
-        }
-    }
-
-    pub(crate) fn write(&mut self, index: usize, stuff_to_overwrite: Option<usize>) {
-        match stuff_to_overwrite {
-            Some(val) => {
-                self.content[index] = Some(val);
-
-                todo!()
-            }
-            None => {
-                self.content[index] = None;
-                todo!()
-            }
-        }
-    }
-
-    pub(crate) fn access(&self, index: usize) -> Option<usize> {
-        self.content[index]
-    }
 }
 
 /// a universal component ID number(regardless of the type) = index in the sparse vec of the sparse set of that specific component type
@@ -156,45 +115,31 @@ impl SparseVec {
 /// => the value in that index = the actual component data
 pub(crate) struct SparseSet {
     dense: TypeErasedVec,
-    sparse: SparseVec,
+    sparse: Vec<usize>,
 }
 impl SparseSet {
     pub(crate) fn new(layout: Layout) -> Self {
         Self {
             dense: TypeErasedVec::new(layout),
-            sparse: SparseVec::new(),
+            sparse: Vec::new(),
         }
     }
 
     fn add(&mut self, ptr: *mut u8, index: usize) {
         self.ensure_sparse_length_by_doubling(index);
-
-        if self.sparse.access(index).is_some() {
-            panic!("this index poisition shouldn't be overwritten");
-        } else {
-            self.dense.push(ptr);
-            self.sparse.write(index, Some(self.dense.len() - 1));
-            //sparse[key.index] = dense_value_index
-        }
+        self.dense.push(ptr);
+        self.sparse[index] = self.dense.len() - 1;
     }
 
     fn ensure_sparse_length_by_doubling(&mut self, index: usize) {
-        if self.sparse.content.len() < index {
-            self.sparse
-                .content
-                .append(&mut vec![None; self.sparse.content.len()]);
+        if self.sparse.len() < index {
+            self.sparse.append(&mut vec![0; self.sparse.len()]);
         }
-    }
-
-    fn remove_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
-        let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
-        self.sparse.write(index, None);
-        self.dense.get_as(sparse_result)
     }
 
     fn get_raw_ptr_from_sparse_set(&self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
-            let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
+            let sparse_result = self.sparse[index];
             let dense_result = self.dense.get_raw_ptr(sparse_result)?;
             Ok(dense_result)
         }
@@ -203,7 +148,7 @@ impl SparseSet {
 
 pub struct Storage {
     data_hash: HashMap<ComponentID, SparseSet>,
-    free_component_id_index: usize,
+    comp_id_free_head: usize,
 }
 
 /// basic storage api
@@ -211,7 +156,7 @@ impl Storage {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
-            free_component_id_index: 0,
+            comp_id_free_head: 0,
         }
     }
 
@@ -258,12 +203,18 @@ impl Storage {
     }
 
     pub(crate) fn get_new_free_index(&mut self) -> usize {
-        self.free_component_id_index += 1;
-        self.free_component_id_index - 1
+        self.comp_id_free_head += 1;
+        self.comp_id_free_head - 1
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
-        let access = self.try_gaining_access(key.id())?;
-        access.remove_as(key.index())
+        unsafe {
+            self.try_gaining_access(key.id())?
+                .get_raw_ptr_from_sparse_set(key.index())?
+                .cast::<C>()
+                .as_mut()
+                .cloned()
+                .ok_or("err")
+        }
     }
 }
