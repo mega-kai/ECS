@@ -9,6 +9,24 @@ use std::{
     ptr::{null, NonNull},
 };
 
+trait SearchFirst {
+    type Target;
+    fn get_first(&self, target: &<Self as SearchFirst>::Target) -> Option<usize>;
+}
+
+impl<T: PartialEq> SearchFirst for Vec<T> {
+    type Target = T;
+
+    fn get_first(&self, target: &<Self as SearchFirst>::Target) -> Option<usize> {
+        for (index, val) in self.iter().enumerate() {
+            if val == target {
+                return Some(index);
+            }
+        }
+        None
+    }
+}
+
 pub(crate) struct TypeErasedVec {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
@@ -33,11 +51,11 @@ impl TypeErasedVec {
         if self.len >= self.capacity {
             self.grow_capacity(unsafe { NonZeroUsize::new_unchecked(self.capacity) });
             unsafe {
-                self.raw_overwrite_at_ptr(self.len, ptr).unwrap();
+                self.overwrite(self.len, ptr).unwrap();
             }
         } else {
             unsafe {
-                self.raw_overwrite_at_ptr(self.len, ptr).unwrap();
+                self.overwrite(self.len, ptr).unwrap();
             }
         }
     }
@@ -66,11 +84,7 @@ impl TypeErasedVec {
         self.data_heap_ptr = new_data_ptr;
     }
 
-    pub(crate) unsafe fn raw_overwrite_at_ptr(
-        &mut self,
-        index: usize,
-        src_ptr: *mut u8,
-    ) -> Result<(), &str> {
+    pub(crate) unsafe fn overwrite(&mut self, index: usize, src_ptr: *mut u8) -> Result<(), &str> {
         if index > self.len {
             Err("index overflow")
         } else {
@@ -81,7 +95,7 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) unsafe fn get_ptr_from_index(&self, index: usize) -> Option<*mut u8> {
+    pub(crate) unsafe fn get(&self, index: usize) -> Option<*mut u8> {
         if index > self.len {
             None
         } else {
@@ -114,24 +128,21 @@ impl TypeErasedVec {
 pub(crate) struct SparseSet {
     dense: TypeErasedVec,
     sparse: Vec<Option<usize>>,
-    id_counter: usize,
 }
 impl SparseSet {
     pub(crate) fn new(layout: Layout) -> Self {
         Self {
             dense: TypeErasedVec::new(layout),
             sparse: vec![None; 64],
-            id_counter: 0,
         }
     }
 
     pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
         // need to ensure length
+        let index = self.sparse.get_first(&None).unwrap();
         self.dense.push(ptr);
-        self.sparse[self.id_counter] = Some(self.dense.len() - 1);
-        self.id_counter += 1;
-        // issuing a new comp id number
-        self.id_counter - 1
+        self.sparse[index] = Some(self.dense.len() - 1);
+        index
     }
 
     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &str> {
@@ -145,8 +156,8 @@ impl SparseSet {
     pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
             let sparse_result = self.sparse[index].ok_or("index is empty")?;
-            self.sparse[index] = None;
             let dense_result = self.dense.get_raw_ptr(sparse_result)?;
+            self.sparse[index] = None;
             Ok(dense_result)
         }
     }
