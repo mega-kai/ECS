@@ -1,4 +1,3 @@
-//type erased storage
 use crate::component::*;
 use crate::query::*;
 use crate::scheduler::*;
@@ -10,7 +9,6 @@ use std::{
     ptr::{null, NonNull},
 };
 
-/// a type erased vector
 pub(crate) struct TypeErasedVec {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
@@ -18,7 +16,6 @@ pub(crate) struct TypeErasedVec {
     capacity: usize,
 }
 impl TypeErasedVec {
-    /// does not handle ZST
     pub(crate) fn new(layout: Layout) -> Self {
         assert!(layout.size() != 0, "type is a ZST",);
 
@@ -34,19 +31,17 @@ impl TypeErasedVec {
 
     pub(crate) fn push(&mut self, ptr: *mut u8) {
         if self.len >= self.capacity {
-            //double the cap
             self.grow_capacity(unsafe { NonZeroUsize::new_unchecked(self.capacity) });
             unsafe {
-                self.raw_insert_from_ptr(self.len, ptr);
+                self.raw_overwrite_at_ptr(self.len, ptr).unwrap();
             }
         } else {
             unsafe {
-                self.raw_insert_from_ptr(self.len, ptr);
+                self.raw_overwrite_at_ptr(self.len, ptr).unwrap();
             }
         }
     }
 
-    /// try to make sure this is only used to double the capacity
     pub(crate) fn grow_capacity(&mut self, grow: NonZeroUsize) {
         let new_capacity = self.capacity + grow.get();
         let (new_layout_of_whole_vec, _) = self
@@ -58,14 +53,11 @@ impl TypeErasedVec {
         } else {
             unsafe {
                 std::alloc::realloc(
-                    //starting at
                     self.data_heap_ptr,
-                    //the extent to uproot
                     self.layout_of_component
                         .repeat(self.capacity)
                         .expect("could not repeat layout")
                         .0,
-                    //length of the new memory
                     new_layout_of_whole_vec.size(),
                 )
             }
@@ -74,14 +66,19 @@ impl TypeErasedVec {
         self.data_heap_ptr = new_data_ptr;
     }
 
-    /// will overwrite the value if the index is taken
-    pub(crate) unsafe fn raw_insert_from_ptr(&mut self, index: usize, src_ptr: *mut u8) {
-        //check if index is valid
-        let raw_dst_ptr = self.get_ptr_from_index(index).expect("index overflow");
-        //memmove size() amount of bytes
-        std::ptr::copy(src_ptr, raw_dst_ptr, self.layout().size());
-        //incrememt the len
-        self.len += 1;
+    pub(crate) unsafe fn raw_overwrite_at_ptr(
+        &mut self,
+        index: usize,
+        src_ptr: *mut u8,
+    ) -> Result<(), &str> {
+        if index > self.len {
+            Err("index overflow")
+        } else {
+            let raw_dst_ptr = self.data_heap_ptr.add(index * self.layout().size());
+            std::ptr::copy(src_ptr, raw_dst_ptr, self.layout().size());
+            self.len += 1;
+            Ok(())
+        }
     }
 
     pub(crate) unsafe fn get_ptr_from_index(&self, index: usize) -> Option<*mut u8> {
@@ -92,9 +89,7 @@ impl TypeErasedVec {
         }
     }
 
-    /// different from get_ptr_from_index as this is not for insertion,
-    /// this is for access
-    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &str> {
+    pub(crate) unsafe fn get_raw_ptr(&self, index: usize) -> Result<*mut u8, &str> {
         if index >= self.len {
             Err("index overflow in dense vec")
         } else {
@@ -114,47 +109,53 @@ impl TypeErasedVec {
         self.capacity
     }
 
-    pub(crate) fn pop_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
+    pub(crate) fn get_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
         unsafe {
-            let result = self
-                .get(index)?
+            self.get_raw_ptr(index)?
                 .cast::<C>()
                 .as_mut()
                 .cloned()
-                .ok_or("could not get the component");
-            //you don't actually reset the data, you just make sure this slot is seen as available, so
-            //it can be overwritten
-            result
+                .ok_or("could not get the component")
         }
     }
 }
 
 struct SparseVec {
     content: Vec<Option<usize>>,
-    /// a collection of free spaces that will point to a None in content
-    free_head: Vec<usize>,
+    free_head: Vec<bool>,
 }
 impl SparseVec {
     pub(crate) fn new() -> Self {
         Self {
             content: vec![None; 64],
-            //if empty
-            free_head: vec![],
+            free_head: vec![true; 64],
         }
     }
 
     pub(crate) fn write(&mut self, index: usize, stuff_to_overwrite: Option<usize>) {
-        todo!()
+        match stuff_to_overwrite {
+            Some(val) => {
+                self.content[index] = Some(val);
+
+                todo!()
+            }
+            None => {
+                self.content[index] = None;
+                todo!()
+            }
+        }
     }
+
     pub(crate) fn access(&self, index: usize) -> Option<usize> {
-        todo!()
+        self.content[index]
     }
 }
 
-/// a type erased sparse set based consisted of a sparse vec and a dense vec
+/// a universal component ID number(regardless of the type) = index in the sparse vec of the sparse set of that specific component type
+/// => the value in that index = index that corresponding dense type erased vec
+/// => the value in that index = the actual component data
 pub(crate) struct SparseSet {
     dense: TypeErasedVec,
-    //the usize is the index for dense, the index of sparse is the value from the key
     sparse: SparseVec,
 }
 impl SparseSet {
@@ -165,8 +166,6 @@ impl SparseSet {
         }
     }
 
-    /// add a type erased component, returning its index value
-    /// in the sparse vec
     fn add(&mut self, ptr: *mut u8, index: usize) {
         self.ensure_sparse_length_by_doubling(index);
 
@@ -181,28 +180,24 @@ impl SparseSet {
 
     fn ensure_sparse_length_by_doubling(&mut self, index: usize) {
         if self.sparse.content.len() < index {
-            //the only way the expand self.sparse, and it will always be 64^n
             self.sparse
                 .content
                 .append(&mut vec![None; self.sparse.content.len()]);
         }
     }
 
-    /// remove both the content in the sparse vec and the dense
-    /// vec according to the index
     fn remove_as<C: Component>(&mut self, index: usize) -> Result<C, &str> {
         let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
-        //reset sparse
         self.sparse.write(index, None);
-        self.dense.pop_as(sparse_result)
+        self.dense.get_as(sparse_result)
     }
 
     /// get a pointer to that type erased component's address in the dense
     /// construct it back to a &C with the queried type layout
-    fn get(&self, index: usize) -> Result<*mut u8, &str> {
+    fn get_raw_ptr_from_sparse_set(&self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
             let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
-            let dense_result = self.dense.get(sparse_result)?;
+            let dense_result = self.dense.get_raw_ptr(sparse_result)?;
             Ok(dense_result)
         }
     }
@@ -217,6 +212,7 @@ impl SparseSet {
 pub struct Storage {
     // no repeating items
     data_hash: HashMap<ComponentID, SparseSet>,
+    // this thing just keeps growing, even if the component is destroy that spot will not be reused again
     free_component_id_index: usize,
 }
 
@@ -264,7 +260,13 @@ impl Storage {
             return Err("generic and the key don't match");
         }
         let access = self.try_gaining_access(key.id())?;
-        unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
+        unsafe {
+            Ok(access
+                .get_raw_ptr_from_sparse_set(key.index())?
+                .cast::<C>()
+                .as_mut()
+                .unwrap())
+        }
     }
 
     pub(crate) fn get_new_free_index(&mut self) -> usize {
@@ -274,6 +276,6 @@ impl Storage {
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
         let access = self.try_gaining_access(key.id())?;
-        todo!()
+        access.remove_as(key.index())
     }
 }

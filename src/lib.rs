@@ -136,9 +136,27 @@ mod test {
         vec.push(ptr0);
         vec.push(ptr1);
         vec.push(ptr2);
-        let thing0 = unsafe { vec.get(0).unwrap().cast::<Player>().as_ref().unwrap() };
-        let thing1 = unsafe { vec.get(1).unwrap().cast::<Player>().as_ref().unwrap() };
-        let thing2 = unsafe { vec.get(2).unwrap().cast::<Player>().as_ref().unwrap() };
+        let thing0 = unsafe {
+            vec.get_raw_ptr(0)
+                .unwrap()
+                .cast::<Player>()
+                .as_ref()
+                .unwrap()
+        };
+        let thing1 = unsafe {
+            vec.get_raw_ptr(1)
+                .unwrap()
+                .cast::<Player>()
+                .as_ref()
+                .unwrap()
+        };
+        let thing2 = unsafe {
+            vec.get_raw_ptr(2)
+                .unwrap()
+                .cast::<Player>()
+                .as_ref()
+                .unwrap()
+        };
         println!("len:{}, cap:{}", vec.len(), vec.cap());
         println!(
             "first: {}, second: {}, third: {}",
@@ -166,7 +184,7 @@ mod test {
             vec_alloc.push((&mut Player("test") as *mut Player).cast::<u8>());
             print!("current index: {}, value: {}", i, unsafe {
                 vec_alloc
-                    .get(0)
+                    .get_raw_ptr(0)
                     .unwrap()
                     .cast::<Player>()
                     .as_ref()
@@ -184,7 +202,7 @@ mod test {
         let key = storage.add_component(Player("test storage"));
         assert_eq!(storage.retrieve::<Player>(key).unwrap().0, "test storage");
 
-        //not match
+        //key type and retrieve type do not match
         let err_non_match = storage.retrieve::<Player>(
             //some random key that is invalid
             ComponentKey {
@@ -195,7 +213,7 @@ mod test {
         assert_eq!(err_non_match.is_err(), true);
         println!("{}", err_non_match.unwrap_err());
 
-        //wrong index
+        //passed in the wrong key index
         let err_wrong_index = storage.retrieve::<Player>(
             //some random key that is invalid
             ComponentKey {
@@ -208,6 +226,7 @@ mod test {
         println!("{}", err_wrong_index.unwrap_err());
 
         //remove functionality
-        //let result = todo!();
+        let result = storage.remove::<Player>(key);
+        assert_eq!(result.unwrap().0, "test storage");
     }
 }
