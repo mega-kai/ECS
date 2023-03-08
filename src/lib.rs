@@ -113,7 +113,8 @@ mod test {
 
     #[test]
     fn type_erased_vec() {
-        let mut vec = TypeErasedVec::new(Layout::new::<Player>(), 16);
+        let vec_len = 4;
+        let mut vec = TypeErasedVec::new(Layout::new::<Player>(), vec_len);
 
         // add/get first one
         let mut player0 = Player("player 0");
@@ -164,5 +165,49 @@ mod test {
             vec.flags
         );
         println!("-------------------------------------");
+
+        // grow
+        for i in 0..(vec_len - 2) {
+            vec.add((&mut Player("filler") as *mut Player) as *mut u8);
+        }
+
+        println!("-------------------------------------\n");
+        println!(
+            "the whole bit set is {:?}\n\nand all should be occupied while {} should equal to {} which is the inital len",
+            vec.flags,
+            vec.flags.len(),
+            vec_len
+        );
+        println!("-------------------------------------");
+
+        vec.add((&mut Player("filler") as *mut Player) as *mut u8);
+
+        println!("-------------------------------------\n");
+        println!(
+            "the whole bit set is {:?}\n\nand all should be occupied while {} should be equal to {} x 2 which is twice the inital len, same with {} which is the length of the dense vec",
+            vec.flags,
+            vec.flags.len(),
+            vec_len,
+            vec.capacity
+        );
+        println!("-------------------------------------");
+        assert_eq!(vec.flags.len(), vec_len * 2);
+        assert_eq!(vec.flags.len(), vec.capacity);
+
+        // remove everything
+        for i in 0..=5 {
+            vec.remove(i).unwrap();
+        }
+        println!("-------------------------------------\n");
+        println!(
+            "the whole bit set is {:?}\n\nand all should be occupied while {} should be equal to {} x 2 which is twice the inital len, same with {} which is the length of the dense vec",
+            vec.flags,
+            vec.flags.len(),
+            vec_len,
+            vec.capacity
+        );
+        println!("-------------------------------------");
+        assert_eq!(vec.flags.len(), vec_len * 2);
+        assert_eq!(vec.flags.len(), vec.capacity);
     }
 }

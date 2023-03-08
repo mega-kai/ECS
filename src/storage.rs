@@ -41,7 +41,7 @@ pub(crate) enum Status {
 pub(crate) struct TypeErasedVec {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
-    capacity: usize,
+    pub(crate) capacity: usize,
 
     // one to one correspondence, basically a bit set
     pub(crate) flags: Vec<Status>,
@@ -61,12 +61,13 @@ impl TypeErasedVec {
 
     // add to the first entry that is None
     pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
-        let index = self.flags.get_first(Status::Empty).unwrap();
-        self.flags[index] = Status::Occupied;
-        if index >= self.capacity {
+        let index = self.flags.get_first(Status::Empty).unwrap_or_else(|| {
+            let len = self.flags.len();
             self.double_cap();
             self.flags.double_cap();
-        }
+            len
+        });
+        self.flags[index] = Status::Occupied;
         unsafe {
             let raw_dst_ptr = self
                 .data_heap_ptr
@@ -107,19 +108,15 @@ impl TypeErasedVec {
             .layout_of_component
             .repeat(new_capacity)
             .expect("could not repeat this layout");
-        let new_data_ptr = if self.capacity == 0 {
-            unsafe { std::alloc::alloc(new_layout_of_whole_vec) }
-        } else {
-            unsafe {
-                std::alloc::realloc(
-                    self.data_heap_ptr,
-                    self.layout_of_component
-                        .repeat(self.capacity)
-                        .expect("could not repeat layout")
-                        .0,
-                    new_layout_of_whole_vec.size(),
-                )
-            }
+        let new_data_ptr = unsafe {
+            std::alloc::realloc(
+                self.data_heap_ptr,
+                self.layout_of_component
+                    .repeat(self.capacity)
+                    .expect("could not repeat layout")
+                    .0,
+                new_layout_of_whole_vec.size(),
+            )
         };
         self.capacity = new_capacity;
         self.data_heap_ptr = new_data_ptr;
