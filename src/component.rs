@@ -1,4 +1,3 @@
-//component its related items
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -6,11 +5,10 @@ use std::{
     mem::size_of,
 };
 
-/// a key to access a component, which includes entities and child entities
+/// a key to access a component
 #[derive(Debug, Clone, Copy)]
 pub struct ComponentKey {
     pub(crate) index: usize,
-    //generation: usize,
     pub(crate) ty: ComponentID,
 }
 impl ComponentKey {
@@ -38,8 +36,6 @@ impl ComponentID {
     }
 }
 
-/// marker trait for components
-/// TODO! proc macro derive
 pub trait Component: Clone + 'static {
     fn id() -> ComponentID {
         ComponentID {

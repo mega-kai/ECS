@@ -1,13 +1,7 @@
 use crate::component::*;
 use crate::query::*;
 use crate::scheduler::*;
-use std::marker::PhantomData;
-use std::{
-    alloc::Layout,
-    collections::HashMap,
-    num::NonZeroUsize,
-    ptr::{null, NonNull},
-};
+use std::{alloc::Layout, collections::HashMap};
 
 trait VecHelperFunc {
     type Target;
