@@ -30,7 +30,7 @@ impl ComponentKey {
     }
 }
 
-/// ID used for comparing component types
+/// identifier for a comp
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
     pub(crate) name: &'static str,

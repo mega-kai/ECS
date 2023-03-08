@@ -110,29 +110,31 @@ impl TypeErasedVec {
     }
 }
 
-/// a universal component ID number(regardless of the type) = index in the sparse vec of the sparse set of that specific component type
-/// => the value in that index = index that corresponding dense type erased vec
-/// => the value in that index = the actual component data
+/// dense_vec[sparse_vec[comp_id]] = actual_comp_data
 pub(crate) struct SparseSet {
     dense: TypeErasedVec,
     sparse: Vec<usize>,
+    free_head: usize,
 }
 impl SparseSet {
     pub(crate) fn new(layout: Layout) -> Self {
         Self {
             dense: TypeErasedVec::new(layout),
-            sparse: Vec::new(),
+            sparse: vec![0; 64],
+            // sorted
+            free_head: 0,
         }
     }
 
-    fn add(&mut self, ptr: *mut u8, index: usize) {
-        self.ensure_sparse_length_by_doubling(index);
+    fn add(&mut self, ptr: *mut u8) -> usize {
+        self.ensure_sparse_length_by_doubling();
         self.dense.push(ptr);
-        self.sparse[index] = self.dense.len() - 1;
+        self.sparse[self.free_head] = self.dense.len() - 1;
+        self.free_head
     }
 
-    fn ensure_sparse_length_by_doubling(&mut self, index: usize) {
-        if self.sparse.len() < index {
+    fn ensure_sparse_length_by_doubling(&mut self) {
+        if self.sparse.len() < self.dense.len() {
             self.sparse.append(&mut vec![0; self.sparse.len()]);
         }
     }
@@ -148,7 +150,6 @@ impl SparseSet {
 
 pub struct Storage {
     data_hash: HashMap<ComponentID, SparseSet>,
-    comp_id_free_head: usize,
 }
 
 /// basic storage api
@@ -156,22 +157,16 @@ impl Storage {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
-            comp_id_free_head: 0,
         }
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        let free_index = self.get_new_free_index();
         match self.try_gaining_access(C::id()) {
-            Ok(access) => {
-                access.add((&mut component as *mut C).cast::<u8>(), free_index);
-                ComponentKey::new::<C>(free_index)
-            }
-            Err(_) => {
-                let access = self.init_set::<C>();
-                access.add((&mut component as *mut C).cast::<u8>(), free_index);
-                ComponentKey::new::<C>(free_index)
-            }
+            Ok(val) => ComponentKey::new::<C>(val.add((&mut component as *mut C).cast::<u8>())),
+            Err(_) => ComponentKey::new::<C>(
+                self.init_set::<C>()
+                    .add((&mut component as *mut C).cast::<u8>()),
+            ),
         }
     }
 
@@ -200,11 +195,6 @@ impl Storage {
                 .as_mut()
                 .unwrap())
         }
-    }
-
-    pub(crate) fn get_new_free_index(&mut self) -> usize {
-        self.comp_id_free_head += 1;
-        self.comp_id_free_head - 1
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
