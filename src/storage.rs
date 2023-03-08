@@ -51,33 +51,21 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) fn add(&mut self, ptr: *mut u8) {
+    pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
         if self.len >= self.capacity {
             self.double_cap();
-            unsafe {
-                self.overwrite(self.len, ptr).unwrap();
-            }
-        } else {
-            unsafe {
-                self.overwrite(self.len, ptr).unwrap();
-            }
         }
-    }
-
-    pub(crate) unsafe fn overwrite(&mut self, index: usize, src_ptr: *mut u8) -> Result<(), &str> {
-        if index > self.len {
-            Err("index overflow")
-        } else {
+        unsafe {
             let raw_dst_ptr = self
                 .data_heap_ptr
-                .add(index * self.layout_of_component.size());
-            std::ptr::copy(src_ptr, raw_dst_ptr, self.layout_of_component.size());
+                .add(self.len * self.layout_of_component.size());
+            std::ptr::copy(ptr, raw_dst_ptr, self.layout_of_component.size());
             self.len += 1;
-            Ok(())
         }
+        todo!()
     }
 
-    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &str> {
+    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
         if index >= self.len {
             Err("index overflow in dense vec")
         } else {
@@ -85,6 +73,10 @@ impl TypeErasedVec {
                 .data_heap_ptr
                 .add(index * self.layout_of_component.size()))
         }
+    }
+
+    pub(crate) fn remove() -> Result<*mut u8, &'static str> {
+        todo!()
     }
 
     pub(crate) fn double_cap(&mut self) {
@@ -129,7 +121,7 @@ impl Storage {
             .or_insert(TypeErasedVec::new(Layout::new::<C>(), 64))
     }
 
-    pub(crate) fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedVec, &str> {
+    pub(crate) fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedVec, &'static str> {
         if let Some(access) = self.data_hash.get_mut(&C::id()) {
             Ok(access)
         } else {
@@ -144,7 +136,7 @@ impl Storage {
         ComponentKey::new::<C>(num)
     }
 
-    pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &str> {
+    pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &'static str> {
         if C::id() != key.id() {
             return Err("generic and the key don't match");
         }
@@ -152,7 +144,7 @@ impl Storage {
         unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
     }
 
-    pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
+    pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
         unsafe {
             self.try_access::<C>()?
                 .get(key.index())?
@@ -186,7 +178,7 @@ impl Storage {
 //         index
 //     }
 
-//     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &str> {
+//     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
 //         unsafe {
 //             let sparse_result = self.sparse[index].ok_or("index is empty")?;
 //             let dense_result = self.dense.get(sparse_result)?;
@@ -194,7 +186,7 @@ impl Storage {
 //         }
 //     }
 
-//     pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &str> {
+//     pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &'static str> {
 //         unsafe {
 //             let sparse_result = self.sparse[index].ok_or("index is empty")?;
 //             let dense_result = self.dense.get(sparse_result)?;
