@@ -210,4 +210,15 @@ mod test {
         assert_eq!(vec.flags.len(), vec_len * 2);
         assert_eq!(vec.flags.len(), vec.capacity);
     }
+
+    #[test]
+    fn storage() {
+        let mut storage = Storage::new();
+
+        // add and retrieve
+        let player0 = Player("pl 0");
+        let key0 = storage.add_component(player0);
+        let ref0 = storage.get::<Player>(key0).unwrap();
+        assert_eq!(ref0.0, player0.0);
+    }
 }

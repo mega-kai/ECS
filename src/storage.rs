@@ -102,7 +102,7 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) fn double_cap(&mut self) {
+    fn double_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
             .layout_of_component
@@ -134,13 +134,13 @@ impl Storage {
         }
     }
 
-    pub(crate) fn ensure_access<C: Component>(&mut self) -> &mut TypeErasedVec {
+    fn ensure_access<C: Component>(&mut self) -> &mut TypeErasedVec {
         self.data_hash
             .entry(C::id())
             .or_insert(TypeErasedVec::new(Layout::new::<C>(), 64))
     }
 
-    pub(crate) fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedVec, &'static str> {
+    fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedVec, &'static str> {
         if let Some(access) = self.data_hash.get_mut(&C::id()) {
             Ok(access)
         } else {
