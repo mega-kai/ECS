@@ -67,21 +67,17 @@ mod test {
 
     use super::*;
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Clone)]
     struct Health(i32);
     impl Component for Health {}
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Clone)]
     struct Mana(i32);
     impl Component for Mana {}
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Clone)]
     struct Player(&'static str);
     impl Component for Player {}
-
-    #[derive(Debug, Clone, Copy)]
-    struct Enemy;
-    impl Component for Enemy {}
 
     fn player_bundle() -> (Player, Health, Mana) {
         (Player("Kai"), Health(100), Mana(100))
@@ -216,9 +212,14 @@ mod test {
         let mut storage = Storage::new();
 
         // add and retrieve
-        let player0 = Player("pl 0");
+        let name = "pl 0";
+        let player0 = Player(name);
         let key0 = storage.add_component(player0);
         let ref0 = storage.get::<Player>(key0).unwrap();
-        assert_eq!(ref0.0, player0.0);
+        assert_eq!(ref0.0, name);
+
+        // remove
+        let remove0 = storage.remove::<Player>(key0).unwrap();
+        assert_eq!(remove0.0, name);
     }
 }

@@ -47,7 +47,7 @@ impl ComponentID {
 
 /// marker trait for components
 /// TODO! proc macro derive
-pub trait Component: Copy + Clone + 'static {
+pub trait Component: Clone + 'static {
     fn id() -> ComponentID {
         ComponentID {
             name: type_name::<Self>(),

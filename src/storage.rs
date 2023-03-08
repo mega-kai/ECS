@@ -166,12 +166,14 @@ impl Storage {
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
         unsafe {
-            self.try_access::<C>()?
-                .get(key.index())?
+            Ok(self
+                .try_access::<C>()?
+                .remove(key.index)
+                .unwrap()
                 .cast::<C>()
                 .as_mut()
                 .cloned()
-                .ok_or("err")
+                .unwrap())
         }
     }
 }
