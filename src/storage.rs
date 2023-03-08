@@ -51,6 +51,7 @@ impl TypeErasedVec {
         }
     }
 
+    // add to the first entry that is None
     pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
         if self.len >= self.capacity {
             self.double_cap();
@@ -75,8 +76,14 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) fn remove() -> Result<*mut u8, &'static str> {
-        todo!()
+    pub(crate) unsafe fn remove(&mut self, index: usize) -> Result<*mut u8, &'static str> {
+        if index >= self.len {
+            Err("index overflow in dense vec")
+        } else {
+            Ok(self
+                .data_heap_ptr
+                .add(index * self.layout_of_component.size()))
+        }
     }
 
     pub(crate) fn double_cap(&mut self) {
