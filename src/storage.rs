@@ -15,8 +15,8 @@ trait VecHelperFunc {
     fn double_cap(&mut self);
 }
 
-impl<T: PartialEq> VecHelperFunc for Vec<T> {
-    type Target = T;
+impl VecHelperFunc for Vec<Option<usize>> {
+    type Target = Option<usize>;
 
     fn get_first(&self, target: &<Self as VecHelperFunc>::Target) -> Option<usize> {
         for (index, val) in self.iter().enumerate() {
@@ -28,7 +28,7 @@ impl<T: PartialEq> VecHelperFunc for Vec<T> {
     }
 
     fn double_cap(&mut self) {
-        todo!()
+        self.resize(self.len() * 2, None);
     }
 }
 
@@ -51,7 +51,7 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) fn push(&mut self, ptr: *mut u8) {
+    pub(crate) fn add(&mut self, ptr: *mut u8) {
         if self.len >= self.capacity {
             self.double_cap();
             unsafe {
@@ -61,6 +61,29 @@ impl TypeErasedVec {
             unsafe {
                 self.overwrite(self.len, ptr).unwrap();
             }
+        }
+    }
+
+    pub(crate) unsafe fn overwrite(&mut self, index: usize, src_ptr: *mut u8) -> Result<(), &str> {
+        if index > self.len {
+            Err("index overflow")
+        } else {
+            let raw_dst_ptr = self
+                .data_heap_ptr
+                .add(index * self.layout_of_component.size());
+            std::ptr::copy(src_ptr, raw_dst_ptr, self.layout_of_component.size());
+            self.len += 1;
+            Ok(())
+        }
+    }
+
+    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &str> {
+        if index >= self.len {
+            Err("index overflow in dense vec")
+        } else {
+            Ok(self
+                .data_heap_ptr
+                .add(index * self.layout_of_component.size()))
         }
     }
 
@@ -86,41 +109,6 @@ impl TypeErasedVec {
         };
         self.capacity = new_capacity;
         self.data_heap_ptr = new_data_ptr;
-    }
-
-    pub(crate) unsafe fn overwrite(&mut self, index: usize, src_ptr: *mut u8) -> Result<(), &str> {
-        if index > self.len {
-            Err("index overflow")
-        } else {
-            let raw_dst_ptr = self.data_heap_ptr.add(index * self.layout().size());
-            std::ptr::copy(src_ptr, raw_dst_ptr, self.layout().size());
-            self.len += 1;
-            Ok(())
-        }
-    }
-
-    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &str> {
-        if index >= self.len {
-            Err("index overflow in dense vec")
-        } else {
-            Ok(self.data_heap_ptr.add(index * self.layout().size()))
-        }
-    }
-
-    pub(crate) fn layout(&self) -> Layout {
-        self.layout_of_component
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.len
-    }
-
-    pub(crate) fn cap(&self) -> usize {
-        self.capacity
-    }
-
-    fn add(&self, u8: *mut u8) -> usize {
-        todo!()
     }
 }
 

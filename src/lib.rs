@@ -133,9 +133,9 @@ mod test {
         let ptr0 = (&mut Player("pinita") as *mut Player).cast::<u8>();
         let ptr1 = (&mut Player("kai") as *mut Player).cast::<u8>();
         let ptr2 = (&mut Player("wolfter") as *mut Player).cast::<u8>();
-        vec.push(ptr0);
-        vec.push(ptr1);
-        vec.push(ptr2);
+        vec.add(ptr0);
+        vec.add(ptr1);
+        vec.add(ptr2);
         let thing0 = unsafe { vec.get(0).unwrap().cast::<Player>().as_ref().unwrap() };
         let thing1 = unsafe { vec.get(1).unwrap().cast::<Player>().as_ref().unwrap() };
         let thing2 = unsafe { vec.get(2).unwrap().cast::<Player>().as_ref().unwrap() };
@@ -163,7 +163,7 @@ mod test {
         // testing the realloc and capacity growth
         let mut vec_alloc = TypeErasedVec::new(Layout::new::<Player>(), 64);
         for i in 0..65 {
-            vec_alloc.push((&mut Player("test") as *mut Player).cast::<u8>());
+            vec_alloc.add((&mut Player("test") as *mut Player).cast::<u8>());
             print!("current index: {}, value: {}", i, unsafe {
                 vec_alloc
                     .get(0)
