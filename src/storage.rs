@@ -9,21 +9,26 @@ use std::{
     ptr::{null, NonNull},
 };
 
-trait SearchFirst {
+trait VecHelperFunc {
     type Target;
-    fn get_first(&self, target: &<Self as SearchFirst>::Target) -> Option<usize>;
+    fn get_first(&self, target: &<Self as VecHelperFunc>::Target) -> Option<usize>;
+    fn double_cap(&mut self);
 }
 
-impl<T: PartialEq> SearchFirst for Vec<T> {
+impl<T: PartialEq> VecHelperFunc for Vec<T> {
     type Target = T;
 
-    fn get_first(&self, target: &<Self as SearchFirst>::Target) -> Option<usize> {
+    fn get_first(&self, target: &<Self as VecHelperFunc>::Target) -> Option<usize> {
         for (index, val) in self.iter().enumerate() {
             if val == target {
                 return Some(index);
             }
         }
         None
+    }
+
+    fn double_cap(&mut self) {
+        todo!()
     }
 }
 
@@ -34,22 +39,21 @@ pub(crate) struct TypeErasedVec {
     capacity: usize,
 }
 impl TypeErasedVec {
-    pub(crate) fn new(layout: Layout) -> Self {
+    pub(crate) fn new(layout: Layout, size: usize) -> Self {
         assert!(layout.size() != 0, "type is a ZST",);
 
-        let mut val = Self {
+        let data_heap_ptr = unsafe { std::alloc::alloc(layout.repeat(size).unwrap().0) };
+        Self {
             layout_of_component: layout,
-            data_heap_ptr: layout.dangling().as_ptr(),
+            data_heap_ptr,
             len: 0,
-            capacity: 0,
-        };
-        val.grow_capacity(unsafe { NonZeroUsize::new_unchecked(64) });
-        val
+            capacity: size,
+        }
     }
 
     pub(crate) fn push(&mut self, ptr: *mut u8) {
         if self.len >= self.capacity {
-            self.grow_capacity(unsafe { NonZeroUsize::new_unchecked(self.capacity) });
+            self.double_cap();
             unsafe {
                 self.overwrite(self.len, ptr).unwrap();
             }
@@ -60,8 +64,8 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) fn grow_capacity(&mut self, grow: NonZeroUsize) {
-        let new_capacity = self.capacity + grow.get();
+    pub(crate) fn double_cap(&mut self) {
+        let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
             .layout_of_component
             .repeat(new_capacity)
@@ -95,15 +99,7 @@ impl TypeErasedVec {
         }
     }
 
-    pub(crate) unsafe fn get(&self, index: usize) -> Option<*mut u8> {
-        if index > self.len {
-            None
-        } else {
-            Some(self.data_heap_ptr.add(index * self.layout().size()))
-        }
-    }
-
-    pub(crate) unsafe fn get_raw_ptr(&self, index: usize) -> Result<*mut u8, &str> {
+    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &str> {
         if index >= self.len {
             Err("index overflow in dense vec")
         } else {
@@ -132,7 +128,7 @@ pub(crate) struct SparseSet {
 impl SparseSet {
     pub(crate) fn new(layout: Layout) -> Self {
         Self {
-            dense: TypeErasedVec::new(layout),
+            dense: TypeErasedVec::new(layout, 64),
             sparse: vec![None; 64],
         }
     }
@@ -148,7 +144,7 @@ impl SparseSet {
     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
             let sparse_result = self.sparse[index].ok_or("index is empty")?;
-            let dense_result = self.dense.get_raw_ptr(sparse_result)?;
+            let dense_result = self.dense.get(sparse_result)?;
             Ok(dense_result)
         }
     }
@@ -156,7 +152,7 @@ impl SparseSet {
     pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
             let sparse_result = self.sparse[index].ok_or("index is empty")?;
-            let dense_result = self.dense.get_raw_ptr(sparse_result)?;
+            let dense_result = self.dense.get(sparse_result)?;
             self.sparse[index] = None;
             Ok(dense_result)
         }
@@ -196,8 +192,6 @@ impl Storage {
             ),
         }
     }
-
-    // maybe a swap function??
 
     pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &str> {
         if C::id() != key.id() {
