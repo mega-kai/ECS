@@ -21,13 +21,6 @@ impl ComponentKey {
             ty: ComponentID::new::<C>(),
         }
     }
-
-    pub(crate) fn id(&self) -> ComponentID {
-        self.ty
-    }
-    pub(crate) fn index(&self) -> usize {
-        self.index
-    }
 }
 
 /// identifier for a comp

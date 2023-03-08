@@ -157,11 +157,11 @@ impl Storage {
     }
 
     pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &'static str> {
-        if C::id() != key.id() {
+        if C::id() != key.ty {
             return Err("generic and the key don't match");
         }
         let access = self.try_access::<C>()?;
-        unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
+        unsafe { Ok(access.get(key.index)?.cast::<C>().as_mut().unwrap()) }
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
