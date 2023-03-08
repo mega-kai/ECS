@@ -170,40 +170,38 @@ impl Storage {
         }
     }
 
-    pub(crate) fn try_gaining_access(&mut self, id: ComponentID) -> Result<&mut SparseSet, &str> {
+    pub(crate) fn ensure_access<C: Component>(&mut self) -> &mut SparseSet {
         self.data_hash
-            .get_mut(&id)
-            .ok_or("no such type of component stored")
+            .entry(C::id())
+            .or_insert(SparseSet::new(Layout::new::<C>()))
     }
 
-    pub(crate) fn init_set<C: Component>(&mut self) -> &mut SparseSet {
-        let id = ComponentID::new::<C>();
-        let layout = Layout::new::<C>();
-        self.data_hash.insert(id, SparseSet::new(layout));
-        self.data_hash.get_mut(&id).unwrap()
+    pub(crate) fn try_access<C: Component>(&mut self) -> Result<&mut SparseSet, &str> {
+        if let Some(access) = self.data_hash.get_mut(&C::id()) {
+            Ok(access)
+        } else {
+            Err("no such component type exist in this storage")
+        }
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        match self.try_gaining_access(C::id()) {
-            Ok(val) => ComponentKey::new::<C>(val.add((&mut component as *mut C).cast::<u8>())),
-            Err(_) => ComponentKey::new::<C>(
-                self.init_set::<C>()
-                    .add((&mut component as *mut C).cast::<u8>()),
-            ),
-        }
+        let num = self
+            .ensure_access::<C>()
+            .add((&mut component as *mut C).cast::<u8>());
+        ComponentKey::new::<C>(num)
     }
 
     pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &str> {
         if C::id() != key.id() {
             return Err("generic and the key don't match");
         }
-        let access = self.try_gaining_access(key.id())?;
+        let access = self.try_access::<C>()?;
         unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
         unsafe {
-            self.try_gaining_access(key.id())?
+            self.try_access::<C>()?
                 .get(key.index())?
                 .cast::<C>()
                 .as_mut()
