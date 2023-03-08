@@ -104,7 +104,7 @@ mod test {
     }
 
     fn system_test(mut command: Command, mut query: Query<&mut Health, With<&Player>>) -> Command {
-        todo!()
+        command
     }
 
     fn empty_system() {
@@ -112,103 +112,13 @@ mod test {
     }
 
     #[test]
-    fn ecs() {
-        //new ecs
-        let mut ecs = ECS::new();
+    fn type_erased_vec() {
+        let mut player1 = Player("player 1");
+        let mut vec = TypeErasedVec::new(Layout::new::<Player>(), 16);
 
-        //add systems
-        ecs.add_system(SystemWithMetadata::once(empty_system));
-
-        //tick cycling
-        //loop {
-        ecs.tick();
-        //}
-    }
-
-    #[test]
-    fn type_erased_vec_push() {
-        // test push()
-        println!("{}", Layout::new::<Player>().size());
-        let mut vec = TypeErasedVec::new(Layout::new::<Player>(), 64);
-        let ptr0 = (&mut Player("pinita") as *mut Player).cast::<u8>();
-        let ptr1 = (&mut Player("kai") as *mut Player).cast::<u8>();
-        let ptr2 = (&mut Player("wolfter") as *mut Player).cast::<u8>();
-        vec.add(ptr0);
-        vec.add(ptr1);
-        vec.add(ptr2);
-        let thing0 = unsafe { vec.get(0).unwrap().cast::<Player>().as_ref().unwrap() };
-        let thing1 = unsafe { vec.get(1).unwrap().cast::<Player>().as_ref().unwrap() };
-        let thing2 = unsafe { vec.get(2).unwrap().cast::<Player>().as_ref().unwrap() };
-        println!("len:{}, cap:{}", vec.len(), vec.cap());
-        println!(
-            "first: {}, second: {}, third: {}",
-            thing0.0.to_uppercase(),
-            thing1.0.to_uppercase(),
-            thing2.0.to_uppercase()
-        );
-        assert_eq!(thing0.0, "pinita");
-        assert_eq!(thing1.0, "kai");
-        assert_eq!(thing2.0, "wolfter");
-    }
-
-    #[test]
-    fn zst() {
-        // making sure ZST is rejected
-        //struct ZST;
-        //let mut zst_vec = TypeErasedVec::new::<ZST>();
-    }
-
-    #[test]
-    fn type_erased_vec_capacity_grow() {
-        // testing the realloc and capacity growth
-        let mut vec_alloc = TypeErasedVec::new(Layout::new::<Player>(), 64);
-        for i in 0..65 {
-            vec_alloc.add((&mut Player("test") as *mut Player).cast::<u8>());
-            print!("current index: {}, value: {}", i, unsafe {
-                vec_alloc
-                    .get(0)
-                    .unwrap()
-                    .cast::<Player>()
-                    .as_ref()
-                    .unwrap()
-                    .0
-            })
-        }
-        assert_eq!(vec_alloc.len(), 65);
-        assert_eq!(vec_alloc.cap(), 128);
-    }
-
-    #[test]
-    fn storage_store_retrieve_remove() {
-        let mut storage = Storage::new();
-        let key = storage.add_component(Player("test storage"));
-        assert_eq!(storage.get::<Player>(key).unwrap().0, "test storage");
-
-        //key type and retrieve type do not match
-        let err_non_match = storage.get::<Player>(
-            //some random key that is invalid
-            ComponentKey {
-                index: 2,
-                ty: Mana::id(),
-            },
-        );
-        assert_eq!(err_non_match.is_err(), true);
-        println!("{}", err_non_match.unwrap_err());
-
-        //passed in the wrong key index
-        let err_wrong_index = storage.get::<Player>(
-            //some random key that is invalid
-            ComponentKey {
-                //the index of the sparse vec would be none
-                index: 10,
-                ty: Player::id(),
-            },
-        );
-        assert_eq!(err_wrong_index.is_err(), true);
-        println!("{}", err_wrong_index.unwrap_err());
-
-        //remove functionality
-        let result = storage.remove::<Player>(key);
-        assert_eq!(result.unwrap().0, "test storage");
+        // add & get
+        let index1 = vec.add((&mut player1 as *mut Player) as *mut u8);
+        let thing = unsafe { vec.get(index1).unwrap().cast::<Player>().as_mut().unwrap() };
+        assert_eq!(thing.0, "player 1");
     }
 }

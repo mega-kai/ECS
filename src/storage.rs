@@ -11,16 +11,16 @@ use std::{
 
 trait VecHelperFunc {
     type Target;
-    fn get_first(&self, target: &<Self as VecHelperFunc>::Target) -> Option<usize>;
+    fn get_first(&self, target: <Self as VecHelperFunc>::Target) -> Option<usize>;
     fn double_cap(&mut self);
 }
 
 impl VecHelperFunc for Vec<Status> {
     type Target = Status;
 
-    fn get_first(&self, target: &<Self as VecHelperFunc>::Target) -> Option<usize> {
+    fn get_first(&self, target: <Self as VecHelperFunc>::Target) -> Option<usize> {
         for (index, val) in self.iter().enumerate() {
-            if val == target {
+            if val == &target {
                 return Some(index);
             }
         }
@@ -41,7 +41,6 @@ enum Status {
 pub(crate) struct TypeErasedVec {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
-    len: usize,
     capacity: usize,
 
     // one to one correspondence, basically a bit set
@@ -55,7 +54,6 @@ impl TypeErasedVec {
         Self {
             layout_of_component: layout,
             data_heap_ptr,
-            len: 0,
             capacity: size,
             flags: vec![Status::Empty; size],
         }
@@ -63,31 +61,35 @@ impl TypeErasedVec {
 
     // add to the first entry that is None
     pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
-        if self.len >= self.capacity {
+        let index = self.flags.get_first(Status::Empty).unwrap();
+        if index >= self.capacity {
             self.double_cap();
+            self.flags.double_cap();
         }
         unsafe {
             let raw_dst_ptr = self
                 .data_heap_ptr
-                .add(self.len * self.layout_of_component.size());
+                .add(index * self.layout_of_component.size());
             std::ptr::copy(ptr, raw_dst_ptr, self.layout_of_component.size());
-            self.len += 1;
         }
+
         todo!()
     }
 
-    pub(crate) unsafe fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
-        if index >= self.len {
+    pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
+        if index >= self.capacity {
             Err("index overflow in dense vec")
         } else {
-            Ok(self
-                .data_heap_ptr
-                .add(index * self.layout_of_component.size()))
+            unsafe {
+                Ok(self
+                    .data_heap_ptr
+                    .add(index * self.layout_of_component.size()))
+            }
         }
     }
 
     pub(crate) unsafe fn remove(&mut self, index: usize) -> Result<*mut u8, &'static str> {
-        if index >= self.len {
+        if index >= self.capacity {
             Err("index overflow in dense vec")
         } else {
             self.flags[index] = Status::Empty;
@@ -148,6 +150,7 @@ impl Storage {
     }
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
+        assert!(component.id_instance() == C::id(), "type inconsistent");
         ComponentKey::new::<C>(
             self.ensure_access::<C>()
                 .add((&mut component as *mut C).cast::<u8>()),

@@ -55,6 +55,13 @@ pub trait Component: Copy + Clone + 'static {
         }
     }
 
+    fn id_instance(&self) -> ComponentID {
+        ComponentID {
+            name: type_name::<Self>(),
+            id: TypeId::of::<Self>(),
+        }
+    }
+
     fn layout(&self) -> Layout {
         Layout::new::<Self>()
     }
