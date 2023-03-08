@@ -113,35 +113,39 @@ impl TypeErasedVec {
 /// dense_vec[sparse_vec[comp_id]] = actual_comp_data
 pub(crate) struct SparseSet {
     dense: TypeErasedVec,
-    sparse: Vec<usize>,
-    free_head: usize,
+    sparse: Vec<Option<usize>>,
+    id_counter: usize,
 }
 impl SparseSet {
     pub(crate) fn new(layout: Layout) -> Self {
         Self {
             dense: TypeErasedVec::new(layout),
-            sparse: vec![0; 64],
-            // sorted
-            free_head: 0,
+            sparse: vec![None; 64],
+            id_counter: 0,
         }
     }
 
-    fn add(&mut self, ptr: *mut u8) -> usize {
-        self.ensure_sparse_length_by_doubling();
+    pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
+        // need to ensure length
         self.dense.push(ptr);
-        self.sparse[self.free_head] = self.dense.len() - 1;
-        self.free_head
+        self.sparse[self.id_counter] = Some(self.dense.len() - 1);
+        self.id_counter += 1;
+        // issuing a new comp id number
+        self.id_counter - 1
     }
 
-    fn ensure_sparse_length_by_doubling(&mut self) {
-        if self.sparse.len() < self.dense.len() {
-            self.sparse.append(&mut vec![0; self.sparse.len()]);
+    pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &str> {
+        unsafe {
+            let sparse_result = self.sparse[index].ok_or("index is empty")?;
+            let dense_result = self.dense.get_raw_ptr(sparse_result)?;
+            Ok(dense_result)
         }
     }
 
-    fn get_raw_ptr_from_sparse_set(&self, index: usize) -> Result<*mut u8, &str> {
+    pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
-            let sparse_result = self.sparse[index];
+            let sparse_result = self.sparse[index].ok_or("index is empty")?;
+            self.sparse[index] = None;
             let dense_result = self.dense.get_raw_ptr(sparse_result)?;
             Ok(dense_result)
         }
@@ -152,21 +156,10 @@ pub struct Storage {
     data_hash: HashMap<ComponentID, SparseSet>,
 }
 
-/// basic storage api
 impl Storage {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
-        }
-    }
-
-    pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
-        match self.try_gaining_access(C::id()) {
-            Ok(val) => ComponentKey::new::<C>(val.add((&mut component as *mut C).cast::<u8>())),
-            Err(_) => ComponentKey::new::<C>(
-                self.init_set::<C>()
-                    .add((&mut component as *mut C).cast::<u8>()),
-            ),
         }
     }
 
@@ -183,24 +176,30 @@ impl Storage {
         self.data_hash.get_mut(&id).unwrap()
     }
 
-    pub(crate) fn retrieve<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &str> {
+    pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
+        match self.try_gaining_access(C::id()) {
+            Ok(val) => ComponentKey::new::<C>(val.add((&mut component as *mut C).cast::<u8>())),
+            Err(_) => ComponentKey::new::<C>(
+                self.init_set::<C>()
+                    .add((&mut component as *mut C).cast::<u8>()),
+            ),
+        }
+    }
+
+    // maybe a swap function??
+
+    pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &str> {
         if C::id() != key.id() {
             return Err("generic and the key don't match");
         }
         let access = self.try_gaining_access(key.id())?;
-        unsafe {
-            Ok(access
-                .get_raw_ptr_from_sparse_set(key.index())?
-                .cast::<C>()
-                .as_mut()
-                .unwrap())
-        }
+        unsafe { Ok(access.get(key.index())?.cast::<C>().as_mut().unwrap()) }
     }
 
     pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &str> {
         unsafe {
             self.try_gaining_access(key.id())?
-                .get_raw_ptr_from_sparse_set(key.index())?
+                .get(key.index())?
                 .cast::<C>()
                 .as_mut()
                 .cloned()

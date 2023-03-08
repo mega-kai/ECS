@@ -200,10 +200,10 @@ mod test {
     fn storage_store_retrieve_remove() {
         let mut storage = Storage::new();
         let key = storage.add_component(Player("test storage"));
-        assert_eq!(storage.retrieve::<Player>(key).unwrap().0, "test storage");
+        assert_eq!(storage.get::<Player>(key).unwrap().0, "test storage");
 
         //key type and retrieve type do not match
-        let err_non_match = storage.retrieve::<Player>(
+        let err_non_match = storage.get::<Player>(
             //some random key that is invalid
             ComponentKey {
                 index: 2,
@@ -214,7 +214,7 @@ mod test {
         println!("{}", err_non_match.unwrap_err());
 
         //passed in the wrong key index
-        let err_wrong_index = storage.retrieve::<Player>(
+        let err_wrong_index = storage.get::<Player>(
             //some random key that is invalid
             ComponentKey {
                 //the index of the sparse vec would be none
