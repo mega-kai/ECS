@@ -192,8 +192,6 @@ impl SparseSet {
         self.dense.get_as(sparse_result)
     }
 
-    /// get a pointer to that type erased component's address in the dense
-    /// construct it back to a &C with the queried type layout
     fn get_raw_ptr_from_sparse_set(&self, index: usize) -> Result<*mut u8, &str> {
         unsafe {
             let sparse_result = self.sparse.access(index).ok_or("invalid sparse index")?;
@@ -203,16 +201,8 @@ impl SparseSet {
     }
 }
 
-/// a hash map of ComponentIDs as keys and SparseSets as values
-/// functioning as a central hub for adding/accessing stored components;
-/// there will be a sparse set just for the entities, which are composed
-/// of keys that can access it's components;
-///
-/// also manages free id number(key index) and generation
 pub struct Storage {
-    // no repeating items
     data_hash: HashMap<ComponentID, SparseSet>,
-    // this thing just keeps growing, even if the component is destroy that spot will not be reused again
     free_component_id_index: usize,
 }
 
@@ -229,7 +219,6 @@ impl Storage {
         let free_index = self.get_new_free_index();
         match self.try_gaining_access(C::id()) {
             Ok(access) => {
-                //which is essentially a memcpy
                 access.add((&mut component as *mut C).cast::<u8>(), free_index);
                 ComponentKey::new::<C>(free_index)
             }
@@ -239,7 +228,6 @@ impl Storage {
                 ComponentKey::new::<C>(free_index)
             }
         }
-        //the component itself will be dropped here
     }
 
     pub(crate) fn try_gaining_access(&mut self, id: ComponentID) -> Result<&mut SparseSet, &str> {
