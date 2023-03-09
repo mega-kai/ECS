@@ -166,4 +166,11 @@ impl Storage {
                 .unwrap())
         }
     }
+
+    fn query_single<C: Component>(&self) -> &[&mut C] {
+        todo!()
+    }
+
+    fn filter_with<C: Component>() {}
+    fn filter_without<C: Component>() {}
 }

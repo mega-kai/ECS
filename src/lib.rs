@@ -20,12 +20,12 @@ impl ECS {
         }
     }
 
-    pub fn add_system(&mut self) {
-        self.scheduler.add_system();
+    pub fn add_system(&mut self, system: System) {
+        self.scheduler.add_system(system);
     }
 
     pub fn tick(&mut self) {
-        self.scheduler.generate_queue();
+        self.scheduler.prepare_queue();
         for system in &self.scheduler.queue {
             system.run(&mut self.storage);
         }
