@@ -9,6 +9,25 @@ pub enum ExecutionFrequency {
     Timed(f64, f64), //in sec
 }
 
+trait SystemParam {}
+impl SystemParam for Command {}
+
+struct Command {}
+impl Command {
+    pub(crate) fn new() -> Self {
+        todo!()
+    }
+
+    pub fn add_component<C: Component>(comp: C) {}
+}
+
+trait SystemOutput {}
+trait System {
+    type Input: SystemParam;
+    type Output: SystemOutput;
+    fn run(&self, input: Self::Input) -> Self::Output;
+}
+
 pub struct Scheduler {
     updated: bool,
     pool: (),

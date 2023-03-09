@@ -11,7 +11,7 @@ trait VecHelperFunc {
 impl VecHelperFunc for Vec<Status> {
     type Target = Status;
 
-    fn get_first(&self, target: <Self as VecHelperFunc>::Target) -> Option<usize> {
+    fn get_first(&self, target: Self::Target) -> Option<usize> {
         for (index, val) in self.iter().enumerate() {
             if val == &target {
                 return Some(index);
