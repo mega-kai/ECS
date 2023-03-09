@@ -5,9 +5,10 @@ use crate::component::*;
 use crate::storage::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[non_exhaustive]
 pub enum ExecutionFrequency {
     Always,
-    Once,
+    Once(bool),
     // Timed(f64, f64),
 }
 
@@ -97,31 +98,57 @@ impl System {
     pub(crate) fn run(&self, storage: &mut Storage) {
         (self.func)(Command::new(storage))
     }
+
+    fn is_once_run(&self) -> bool {
+        match self.frequency {
+            ExecutionFrequency::Always => false,
+            ExecutionFrequency::Once(run_status) => run_status,
+            // _ => todo!(),
+        }
+    }
+}
+
+impl PartialEq for System {
+    fn eq(&self, other: &Self) -> bool {
+        self.order == other.order
+    }
+}
+impl Eq for System {}
+impl PartialOrd for System {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.order.partial_cmp(&other.order)
+    }
+}
+impl Ord for System {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.order.cmp(&other.order)
+    }
 }
 
 pub struct Scheduler {
-    updated: bool,
-    pool: Vec<System>,
+    new_pool: Vec<System>,
+    waiting: Vec<System>,
     pub(crate) queue: Vec<System>,
 }
 impl Scheduler {
     pub fn new() -> Self {
         Self {
-            pool: vec![],
+            new_pool: vec![],
+            waiting: vec![],
             queue: vec![],
-            updated: false,
         }
     }
 
     pub fn add_system(&mut self, system: System) {
-        self.pool.push(system);
-        self.updated = true;
+        self.new_pool.push(system);
     }
 
     pub(crate) fn prepare_queue(&mut self) {
-        if self.updated {
-            self.updated = false;
-        } else {
+        self.queue.retain(|x| !x.is_once_run());
+        if !self.new_pool.is_empty() {
+            self.queue.append(&mut self.new_pool);
+            self.queue.clear();
         }
+        self.queue.sort();
     }
 }
