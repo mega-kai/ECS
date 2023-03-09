@@ -5,27 +5,37 @@ use crate::storage::*;
 pub enum ExecutionFrequency {
     Always,
     Once,
-    //make sure smaller than tick duration
-    Timed(f64, f64), //in sec
+    // Timed(f64, f64),
 }
 
 trait SystemParam {}
-impl SystemParam for Command {}
+impl<'a> SystemParam for Command<'a> {}
 
-struct Command {}
-impl Command {
+struct Command<'a> {
+    storage: &'a mut Storage,
+}
+impl<'a> Command<'a> {
     pub(crate) fn new() -> Self {
         todo!()
     }
 
-    pub fn add_component<C: Component>(comp: C) {}
+    pub fn add_component<C: Component>(&mut self, component: C) {
+        self.storage.add_component(component);
+    }
+
+    pub fn remove_and_discard_component<C: Component>(&mut self, key: ComponentKey) {
+        let discard = self.storage.remove::<C>(key).unwrap();
+    }
 }
 
-trait SystemOutput {}
+struct Query<'a> {
+    storage: &'a mut Storage,
+}
+impl<'a> Query<'a> {}
+
 trait System {
     type Input: SystemParam;
-    type Output: SystemOutput;
-    fn run(&self, input: Self::Input) -> Self::Output;
+    fn run(&self, input: Self::Input);
 }
 
 pub struct Scheduler {
