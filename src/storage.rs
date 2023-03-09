@@ -1,5 +1,4 @@
 use crate::component::*;
-use crate::query::*;
 use crate::scheduler::*;
 use std::{alloc::Layout, collections::HashMap};
 
