@@ -3,11 +3,9 @@
 mod component;
 mod scheduler;
 mod storage;
-mod system;
 use component::*;
 use scheduler::*;
 use storage::*;
-use system::*;
 
 pub struct ECS {
     storage: Storage,
@@ -54,8 +52,20 @@ mod test {
     struct Player(&'static str);
     impl Component for Player {}
 
-    fn player_bundle() -> (Player, Health, Mana) {
-        (Player("Kai"), Health(100), Mana(100))
+    fn take_comp<C0: Component, C1: Component>(c0: C0, c1: C1) {
+        println!("{:?}", c0.id_instance());
+        println!("{:?}", c1.id_instance());
+        assert_ne!(c0.id_instance(), c1.id_instance());
+    }
+
+    // auto derive component trait
+    type PLAYER = (Player, Health);
+
+    #[test]
+    fn main() {
+        let player: PLAYER = (Player("name"), Health(100));
+        take_comp(player.clone(), player);
+        take_comp((Mana(12), Health(12)), (Health(12), Mana(12)));
     }
 
     #[test]

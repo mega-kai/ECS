@@ -5,8 +5,7 @@ use std::{
     mem::size_of,
 };
 
-/// a key to access a component
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentKey {
     pub(crate) index: usize,
     pub(crate) ty: ComponentID,
@@ -21,7 +20,6 @@ impl ComponentKey {
     }
 }
 
-/// identifier for a comp
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
     pub(crate) name: &'static str,
@@ -60,4 +58,38 @@ pub trait Component: Clone + 'static {
     }
 }
 
+impl<C0: Component> Component for (C0,) {}
 impl<C0: Component, C1: Component> Component for (C0, C1) {}
+impl<C0: Component, C1: Component, C2: Component> Component for (C0, C1, C2) {}
+impl<C0: Component, C1: Component, C2: Component, C3: Component> Component for (C0, C1, C2, C3) {}
+impl<C0: Component, C1: Component, C2: Component, C3: Component, C4: Component> Component
+    for (C0, C1, C2, C3, C4)
+{
+}
+impl<C0: Component, C1: Component, C2: Component, C3: Component, C4: Component, C5: Component>
+    Component for (C0, C1, C2, C3, C4, C5)
+{
+}
+impl<
+        C0: Component,
+        C1: Component,
+        C2: Component,
+        C3: Component,
+        C4: Component,
+        C5: Component,
+        C6: Component,
+    > Component for (C0, C1, C2, C3, C4, C5, C6)
+{
+}
+impl<
+        C0: Component,
+        C1: Component,
+        C2: Component,
+        C3: Component,
+        C4: Component,
+        C5: Component,
+        C6: Component,
+        C7: Component,
+    > Component for (C0, C1, C2, C3, C4, C5, C6, C7)
+{
+}

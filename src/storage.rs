@@ -35,8 +35,6 @@ pub(crate) struct TypeErasedVec {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
-
-    // one to one correspondence, basically a bit set
     pub(crate) flags: Vec<Status>,
 }
 impl TypeErasedVec {
@@ -52,7 +50,6 @@ impl TypeErasedVec {
         }
     }
 
-    // add to the first entry that is None
     pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
         let index = self.flags.get_first(Status::Empty).unwrap_or_else(|| {
             let len = self.flags.len();
@@ -170,43 +167,3 @@ impl Storage {
         }
     }
 }
-
-// /// dense_vec[sparse_vec[comp_id]] = actual_comp_data
-// pub(crate) struct SparseSet {
-//     dense: TypeErasedVec,
-//     sparse: Vec<Option<usize>>,
-// }
-// impl SparseSet {
-//     pub(crate) fn new(layout: Layout) -> Self {
-//         Self {
-//             dense: TypeErasedVec::new(layout, 64),
-//             sparse: vec![None; 64],
-//         }
-//     }
-
-//     pub(crate) fn write(&mut self, ptr: *mut u8) -> usize {
-//         // need to ensure length
-//         let index = self.sparse.get_first(&None).unwrap();
-//         // dense is not being reused
-//         self.dense.push(ptr);
-//         self.sparse[index] = Some(self.dense.len() - 1);
-//         index
-//     }
-
-//     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
-//         unsafe {
-//             let sparse_result = self.sparse[index].ok_or("index is empty")?;
-//             let dense_result = self.dense.get(sparse_result)?;
-//             Ok(dense_result)
-//         }
-//     }
-
-//     pub(crate) fn remove(&mut self, index: usize) -> Result<*mut u8, &'static str> {
-//         unsafe {
-//             let sparse_result = self.sparse[index].ok_or("index is empty")?;
-//             let dense_result = self.dense.get(sparse_result)?;
-//             self.sparse[index] = None;
-//             Ok(dense_result)
-//         }
-//     }
-// }

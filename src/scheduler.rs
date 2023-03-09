@@ -1,14 +1,15 @@
-use std::any::Any;
-
-//the scheduler and the executor
 use crate::component::*;
 use crate::storage::*;
-use crate::system::*;
-/// storing and running all the systems, generating ordered queue for those
-/// systems to run, all the while requesting
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExecutionFrequency {
+    Always,
+    Once,
+    //make sure smaller than tick duration
+    Timed(f64, f64), //in sec
+}
+
 pub struct Scheduler {
-    //toggle this flag on when ECS::add_system invoked
-    //toggle this flag off when a new queue is generated once
     updated: bool,
     pool: (),
     queue: (),
