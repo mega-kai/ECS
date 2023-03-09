@@ -25,10 +25,10 @@ impl ECS {
     }
 
     pub fn tick(&mut self) {
-        //generating a new queue
-        //supplying with all the query access
-        //executing all the systems in that queue sequentially
-        self.scheduler.execute_all();
+        self.scheduler.generate_queue();
+        for system in &self.scheduler.queue {
+            system.run(&mut self.storage);
+        }
     }
 }
 

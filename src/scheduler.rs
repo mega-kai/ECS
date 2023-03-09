@@ -1,53 +1,78 @@
+use std::marker::PhantomData;
+use std::slice;
+
 use crate::component::*;
 use crate::storage::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum ExecutionFrequency {
     Always,
     Once,
     // Timed(f64, f64),
 }
 
-trait SystemParam {}
-impl<'a> SystemParam for Command<'a> {}
-
-struct Command<'a> {
+pub struct Command<'a> {
     storage: &'a mut Storage,
 }
 impl<'a> Command<'a> {
-    pub(crate) fn new() -> Self {
-        todo!()
+    pub(crate) fn new(storage: &'a mut Storage) -> Self {
+        Self { storage }
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) {
         self.storage.add_component(component);
     }
 
-    pub fn remove_and_discard_component<C: Component>(&mut self, key: ComponentKey) {
-        let discard = self.storage.remove::<C>(key).unwrap();
+    pub fn remove_component<C: Component>(&mut self, key: ComponentKey) -> C {
+        self.storage.remove::<C>(key).unwrap()
+    }
+
+    pub fn query<Target: Component, Filter: Component>(&mut self) {}
+}
+
+// sortable with partial_eq
+pub struct System {
+    order: usize,
+    frequency: ExecutionFrequency,
+    func: fn(Command),
+}
+impl System {
+    pub fn default(func: fn(Command)) -> Self {
+        Self {
+            order: 0,
+            frequency: ExecutionFrequency::Always,
+            func,
+        }
+    }
+
+    pub fn new(order: usize, frequency: ExecutionFrequency, func: fn(Command)) -> Self {
+        Self {
+            order,
+            frequency,
+            func,
+        }
+    }
+
+    pub(crate) fn run(&self, storage: &mut Storage) {
+        (self.func)(Command::new(storage))
     }
 }
 
-struct Query<'a> {
-    storage: &'a mut Storage,
-}
-impl<'a> Query<'a> {}
-
-trait System {
-    type Input: SystemParam;
-    fn run(&self, input: Self::Input);
+// iterator and also indexible
+struct QueryResult<C: Component> {
+    phamtom: PhantomData<C>,
 }
 
 pub struct Scheduler {
     updated: bool,
-    pool: (),
-    queue: (),
+    pool: Vec<System>,
+    pub(crate) queue: Vec<System>,
 }
 impl Scheduler {
     pub fn new() -> Self {
         Self {
-            pool: (),
-            queue: (),
+            pool: vec![],
+            queue: vec![],
             updated: false,
         }
     }
@@ -56,7 +81,5 @@ impl Scheduler {
         self.updated = true;
     }
 
-    pub fn generate_queue_for_current_tick(&mut self) {}
-
-    pub fn execute_all(&mut self) {}
+    pub(crate) fn generate_queue(&mut self) {}
 }
