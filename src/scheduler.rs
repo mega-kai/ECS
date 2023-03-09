@@ -28,38 +28,10 @@ impl<'a> Command<'a> {
         self.storage.remove::<C>(key).unwrap()
     }
 
-    pub fn query<T: Component, F: Filter>(&mut self) {}
-}
-
-pub trait Filter {}
-impl<C: Component> Filter for And<C> {}
-impl<C: Component> Filter for Or<C> {}
-impl<C: Component> Filter for Not<C> {}
-
-impl<F0: Filter> Filter for (F0,) {}
-impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
-impl<F0: Filter, F1: Filter, F2: Filter> Filter for (F0, F1, F2) {}
-impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
-impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter, F4: Filter> Filter for (F0, F1, F2, F3, F4) {}
-impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter, F4: Filter, F5: Filter> Filter
-    for (F0, F1, F2, F3, F4, F5)
-{
-}
-impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter, F4: Filter, F5: Filter, F6: Filter> Filter
-    for (F0, F1, F2, F3, F4, F5, F6)
-{
-}
-impl<
-        F0: Filter,
-        F1: Filter,
-        F2: Filter,
-        F3: Filter,
-        F4: Filter,
-        F5: Filter,
-        F6: Filter,
-        F7: Filter,
-    > Filter for (F0, F1, F2, F3, F4, F5, F6, F7)
-{
+    pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
+        let result = self.storage.query_single::<C>();
+        todo!()
+    }
 }
 
 pub struct And<C: Component> {
@@ -71,6 +43,16 @@ pub struct Or<C: Component> {
 pub struct Not<C: Component> {
     phantom: PhantomData<C>,
 }
+
+pub trait Filter {}
+impl<C: Component> Filter for And<C> {}
+impl<C: Component> Filter for Or<C> {}
+impl<C: Component> Filter for Not<C> {}
+
+impl<F0: Filter> Filter for (F0,) {}
+impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
+impl<F0: Filter, F1: Filter, F2: Filter> Filter for (F0, F1, F2) {}
+impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
 
 // sortable with partial_eq
 pub struct System {

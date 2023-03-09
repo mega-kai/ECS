@@ -167,10 +167,7 @@ impl Storage {
         }
     }
 
-    fn query_single<C: Component>(&self) -> &[&mut C] {
+    pub(crate) fn query_single<C: Component>(&self) -> Vec<&mut C> {
         todo!()
     }
-
-    fn filter_with<C: Component>() {}
-    fn filter_without<C: Component>() {}
 }
