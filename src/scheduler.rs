@@ -34,20 +34,16 @@ impl<'a> Command<'a> {
     }
 }
 
-pub struct And<C: Component> {
+pub struct With<C: Component> {
     phantom: PhantomData<C>,
 }
-pub struct Or<C: Component> {
-    phantom: PhantomData<C>,
-}
-pub struct Not<C: Component> {
+pub struct Without<C: Component> {
     phantom: PhantomData<C>,
 }
 
 pub trait Filter {}
-impl<C: Component> Filter for And<C> {}
-impl<C: Component> Filter for Or<C> {}
-impl<C: Component> Filter for Not<C> {}
+impl<C: Component> Filter for With<C> {}
+impl<C: Component> Filter for Without<C> {}
 
 impl<F0: Filter> Filter for (F0,) {}
 impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
