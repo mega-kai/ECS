@@ -59,3 +59,5 @@ pub trait Component: Clone + 'static {
         size_of::<Self>()
     }
 }
+
+impl<C0: Component, C1: Component> Component for (C0, C1) {}
