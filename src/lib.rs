@@ -174,18 +174,18 @@ mod test {
         let name0 = "pl 0";
         let player0 = Player(name0);
         let key0 = storage.add_component(player0);
-        let ref0 = storage.get::<Player>(key0).unwrap();
+        let ref0 = storage.get_as::<Player>(key0).unwrap();
         assert_eq!(ref0.0, name0);
 
         // remove
-        let remove0 = storage.remove::<Player>(key0).unwrap();
+        let remove0 = storage.remove_as::<Player>(key0).unwrap();
         assert_eq!(remove0.0, name0);
 
         // error: mismatched types
         let name1 = "pl 1";
         let player1 = Player(name1);
         let key1 = storage.add_component(player1);
-        let err1 = storage.get::<Mana>(key1);
+        let err1 = storage.get_as::<Mana>(key1);
         assert_eq!(err1.unwrap_err(), "generic and the key don't match");
 
         // error: wrong key index
@@ -193,7 +193,7 @@ mod test {
         let player2 = Player(name2);
         let key2 = storage.add_component(player2);
         let err2 = storage
-            .get::<Player>(ComponentKey::new::<Player>(999))
+            .get_as::<Player>(ComponentKey::new::<Player>(999))
             .unwrap_err();
         // println!("{}", err2);
         assert_eq!(err2, "index overflow in dense vec");
@@ -203,7 +203,7 @@ mod test {
         let player3 = Player(name3);
         let key3 = storage.add_component(player3);
         let err3 = storage
-            .get::<Mana>(ComponentKey::new::<Mana>(999))
+            .get_as::<Mana>(ComponentKey::new::<Mana>(999))
             .unwrap_err();
         // println!("{}", err3);
         assert_eq!(err3, "no such component type exist in this storage");

@@ -113,14 +113,23 @@ impl TypeErasedVec {
     }
 }
 
+struct CompKeyGroup(Vec<ComponentKey>);
+impl CompKeyGroup {
+    pub(crate) fn new() -> Self {
+        Self(vec![])
+    }
+}
+
 pub struct Storage {
     data_hash: HashMap<ComponentID, TypeErasedVec>,
+    graph_data: CompKeyGroup,
 }
 
 impl Storage {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
+            graph_data: CompKeyGroup::new(),
         }
     }
 
@@ -146,7 +155,10 @@ impl Storage {
         )
     }
 
-    pub(crate) fn get<C: Component>(&mut self, key: ComponentKey) -> Result<&mut C, &'static str> {
+    pub(crate) fn get_as<C: Component>(
+        &mut self,
+        key: ComponentKey,
+    ) -> Result<&mut C, &'static str> {
         if C::id() != key.ty {
             return Err("generic and the key don't match");
         }
@@ -154,7 +166,7 @@ impl Storage {
         unsafe { Ok(access.get(key.index)?.cast::<C>().as_mut().unwrap()) }
     }
 
-    pub(crate) fn remove<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
+    pub(crate) fn remove_as<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
         unsafe {
             Ok(self
                 .try_access::<C>()?
@@ -167,7 +179,19 @@ impl Storage {
         }
     }
 
-    pub(crate) fn query_single<C: Component>(&self) -> Vec<&mut C> {
+    pub(crate) fn query_single<C: Component>(&mut self) -> Vec<&mut C> {
+        if let Some(val) = self.data_hash.get_mut(&C::id()) {
+            todo!()
+        } else {
+            vec![]
+        }
+    }
+
+    pub(crate) fn get_associated_comps(
+        &self,
+        key: ComponentKey,
+    ) -> Result<Vec<ComponentKey>, &'static str> {
+        self.graph_data.get(&key);
         todo!()
     }
 }

@@ -1,8 +1,6 @@
-use std::marker::PhantomData;
-use std::slice;
-
 use crate::component::*;
 use crate::storage::*;
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[non_exhaustive]
@@ -25,32 +23,50 @@ impl<'a> Command<'a> {
     }
 
     pub fn remove_component<C: Component>(&mut self, key: ComponentKey) -> C {
-        self.storage.remove::<C>(key).unwrap()
+        self.storage.remove_as::<C>(key).unwrap()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
-        let result = self.storage.query_single::<C>();
-        todo!()
+        F::apply_on(self.storage.query_single::<C>())
     }
 }
 
 pub struct With<C: Component> {
     phantom: PhantomData<C>,
 }
+impl<FilterComp: Component> With<FilterComp> {
+    fn apply_to<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
+        todo!()
+    }
+}
 pub struct Without<C: Component> {
     phantom: PhantomData<C>,
 }
+impl<FilterComp: Component> Without<FilterComp> {
+    fn apply_to<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
+        todo!()
+    }
+}
 
-pub trait Filter {}
-impl<C: Component> Filter for With<C> {}
-impl<C: Component> Filter for Without<C> {}
+pub trait Filter: Sized {
+    fn apply_on<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target>;
+}
+impl<FilterComp: Component> Filter for With<FilterComp> {
+    fn apply_on<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
+        With::<FilterComp>::apply_to::<Target>(vec)
+    }
+}
+impl<FilterComp: Component> Filter for Without<FilterComp> {
+    fn apply_on<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
+        Without::<FilterComp>::apply_to::<Target>(vec)
+    }
+}
 
-impl<F0: Filter> Filter for (F0,) {}
-impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
-impl<F0: Filter, F1: Filter, F2: Filter> Filter for (F0, F1, F2) {}
-impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
+// impl<F0: Filter> Filter for (F0,) {}
+// impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
+// impl<F0: Filter, F1: Filter, F2: Filter> Filter for (F0, F1, F2) {}
+// impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
 
-// sortable with partial_eq
 pub struct System {
     order: usize,
     frequency: ExecutionFrequency,
@@ -81,7 +97,7 @@ impl System {
         match self.frequency {
             ExecutionFrequency::Always => false,
             ExecutionFrequency::Once(run_status) => run_status,
-            // _ => todo!(),
+            // _ => non exhaustive,
         }
     }
 }
