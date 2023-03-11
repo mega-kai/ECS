@@ -22,6 +22,7 @@ impl ComponentKey {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
+    pub(crate) column_index: usize,
     pub(crate) name: &'static str,
     pub(crate) id: TypeId,
 }
@@ -30,6 +31,7 @@ impl ComponentID {
         Self {
             name: type_name::<C>(),
             id: TypeId::of::<C>(),
+            column_index: 0,
         }
     }
 }
@@ -39,6 +41,7 @@ pub trait Component: Clone + 'static {
         ComponentID {
             name: type_name::<Self>(),
             id: TypeId::of::<Self>(),
+            column_index: 0,
         }
     }
 
@@ -46,6 +49,7 @@ pub trait Component: Clone + 'static {
         ComponentID {
             name: type_name::<Self>(),
             id: TypeId::of::<Self>(),
+            column_index: 0,
         }
     }
 

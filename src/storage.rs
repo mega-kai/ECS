@@ -118,12 +118,16 @@ impl TypeErasedColumn {
 /// columns are type and rows are index
 pub struct ComponentTable {
     data_hash: HashMap<ComponentID, TypeErasedColumn>,
+    row_freehead: usize,
+    column_freehead: usize,
 }
 
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
+            column_freehead: 0,
+            row_freehead: 0,
         }
     }
 
