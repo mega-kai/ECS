@@ -147,26 +147,30 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
+    pub(crate) fn insert<C: Component>(&mut self, mut component: C) -> ComponentAccess {
         assert!(component.id_instance() == C::id(), "type inconsistent");
         self.row_size += 1;
         let num = self.row_size;
         self.ensure_access_of_type::<C>()
             .add((&mut component as *mut C).cast::<u8>(), num - 1);
-        ComponentKey::new_from_type::<C>(num - 1)
+        ComponentAccess::new_from_type::<C>(num - 1)
+    }
+
+    pub(crate) fn link(&mut self, key1: ComponentAccess, key2: ComponentAccess) {
+        todo!()
     }
 
     pub(crate) fn add_component_to_a_linked_group_from_any_key_from_that_group<C: Component>(
         &mut self,
-        key: ComponentKey,
+        key: ComponentAccess,
         mut component: C,
-    ) -> Result<ComponentKey, &'static str> {
+    ) -> Result<ComponentAccess, &'static str> {
         todo!()
     }
 
     pub(crate) fn get_as<C: Component>(
         &mut self,
-        key: ComponentKey,
+        key: ComponentAccess,
     ) -> Result<&mut C, &'static str> {
         if C::id() != key.ty {
             return Err("generic and the key don't match");
@@ -175,7 +179,10 @@ impl ComponentTable {
         unsafe { Ok(access.get(key.row_index)?.cast::<C>().as_mut().unwrap()) }
     }
 
-    pub(crate) fn remove_as<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
+    pub(crate) fn remove_as<C: Component>(
+        &mut self,
+        key: ComponentAccess,
+    ) -> Result<C, &'static str> {
         unsafe {
             Ok(self
                 .try_access::<C>()?
@@ -198,8 +205,8 @@ impl ComponentTable {
 
     pub(crate) fn get_associated_comps(
         &self,
-        key: ComponentKey,
-    ) -> Result<Vec<ComponentKey>, &'static str> {
+        key: ComponentAccess,
+    ) -> Result<Vec<ComponentAccess>, &'static str> {
         // self.graph_data.get(&key);
         todo!()
     }

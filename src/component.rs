@@ -6,16 +6,18 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ComponentKey {
+pub struct ComponentAccess {
     pub(crate) row_index: usize,
     pub(crate) ty: ComponentID,
+    pub(crate) access: *mut u8,
 }
-impl ComponentKey {
+impl ComponentAccess {
     pub(crate) fn new_from_type<C: Component>(index: usize) -> Self {
         Self {
             row_index: index,
-            //generation: 0,
+            //generation: usize,
             ty: ComponentID::new::<C>(),
+            access: Layout::new::<u8>().dangling().as_ptr(),
         }
     }
 }

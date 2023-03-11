@@ -19,10 +19,10 @@ impl<'a> Command<'a> {
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) {
-        self.storage.add_component(component);
+        self.storage.insert(component);
     }
 
-    pub fn remove_component<C: Component>(&mut self, key: ComponentKey) -> C {
+    pub fn remove_component<C: Component>(&mut self, key: ComponentAccess) -> C {
         self.storage.remove_as::<C>(key).unwrap()
     }
 
