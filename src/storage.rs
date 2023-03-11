@@ -37,8 +37,13 @@ pub(crate) struct TypeErasedColumn {
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
     pub(crate) flags: Vec<Status>,
+    // additional info containing which index are taken
 }
 impl TypeErasedColumn {
+    pub(crate) fn query_all_valid_data(&mut self) {
+        // might still need sparse set
+        // upon dense_removal the last one is moved to the spot that just got removed, and reflected in sparse
+    }
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
         assert!(layout.size() != 0, "type is a ZST",);
 
@@ -51,21 +56,18 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn add(&mut self, ptr: *mut u8) -> usize {
-        let index = self.flags.get_first(Status::Empty).unwrap_or_else(|| {
-            let len = self.flags.len();
+    pub(crate) fn add(&mut self, ptr: *mut u8, row_index: usize) {
+        if row_index >= self.capacity {
             self.double_cap();
             self.flags.double_cap();
-            len
-        });
-        self.flags[index] = Status::Occupied;
+        }
+        self.flags[row_index] = Status::Occupied;
         unsafe {
             let raw_dst_ptr = self
                 .data_heap_ptr
-                .add(index * self.layout_of_component.size());
+                .add(row_index * self.layout_of_component.size());
             std::ptr::copy(ptr, raw_dst_ptr, self.layout_of_component.size());
         }
-        index
     }
 
     pub(crate) fn get(&self, index: usize) -> Result<*mut u8, &'static str> {
@@ -115,7 +117,7 @@ impl TypeErasedColumn {
 }
 
 /// comp keys with same index are considered related;
-/// columns are type and rows are index
+/// columns are type and rows are index;
 pub struct ComponentTable {
     data_hash: HashMap<ComponentID, TypeErasedColumn>,
     row_size: usize,
@@ -131,7 +133,7 @@ impl ComponentTable {
         }
     }
 
-    fn ensure_access<C: Component>(&mut self) -> &mut TypeErasedColumn {
+    fn ensure_access_of_type<C: Component>(&mut self) -> &mut TypeErasedColumn {
         self.data_hash
             .entry(C::id())
             .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
@@ -147,10 +149,19 @@ impl ComponentTable {
 
     pub(crate) fn add_component<C: Component>(&mut self, mut component: C) -> ComponentKey {
         assert!(component.id_instance() == C::id(), "type inconsistent");
-        ComponentKey::new::<C>(
-            self.ensure_access::<C>()
-                .add((&mut component as *mut C).cast::<u8>()),
-        )
+        self.row_size += 1;
+        let num = self.row_size;
+        self.ensure_access_of_type::<C>()
+            .add((&mut component as *mut C).cast::<u8>(), num - 1);
+        ComponentKey::new_from_type::<C>(num - 1)
+    }
+
+    pub(crate) fn add_component_to_a_linked_group_from_any_key_from_that_group<C: Component>(
+        &mut self,
+        key: ComponentKey,
+        mut component: C,
+    ) -> Result<ComponentKey, &'static str> {
+        todo!()
     }
 
     pub(crate) fn get_as<C: Component>(
@@ -161,14 +172,14 @@ impl ComponentTable {
             return Err("generic and the key don't match");
         }
         let access = self.try_access::<C>()?;
-        unsafe { Ok(access.get(key.index)?.cast::<C>().as_mut().unwrap()) }
+        unsafe { Ok(access.get(key.row_index)?.cast::<C>().as_mut().unwrap()) }
     }
 
     pub(crate) fn remove_as<C: Component>(&mut self, key: ComponentKey) -> Result<C, &'static str> {
         unsafe {
             Ok(self
                 .try_access::<C>()?
-                .remove(key.index)
+                .remove(key.row_index)
                 .unwrap()
                 .cast::<C>()
                 .as_mut()

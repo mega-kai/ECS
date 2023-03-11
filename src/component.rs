@@ -7,13 +7,13 @@ use std::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentKey {
-    pub(crate) index: usize,
+    pub(crate) row_index: usize,
     pub(crate) ty: ComponentID,
 }
 impl ComponentKey {
-    pub(crate) fn new<C: Component>(index: usize) -> Self {
+    pub(crate) fn new_from_type<C: Component>(index: usize) -> Self {
         Self {
-            index,
+            row_index: index,
             //generation: 0,
             ty: ComponentID::new::<C>(),
         }

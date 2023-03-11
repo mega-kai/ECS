@@ -193,7 +193,7 @@ mod test {
         let player2 = Player(name2);
         let key2 = storage.add_component(player2);
         let err2 = storage
-            .get_as::<Player>(ComponentKey::new::<Player>(999))
+            .get_as::<Player>(ComponentKey::new_from_type::<Player>(999))
             .unwrap_err();
         // println!("{}", err2);
         assert_eq!(err2, "index overflow in dense vec");
@@ -203,7 +203,7 @@ mod test {
         let player3 = Player(name3);
         let key3 = storage.add_component(player3);
         let err3 = storage
-            .get_as::<Mana>(ComponentKey::new::<Mana>(999))
+            .get_as::<Mana>(ComponentKey::new_from_type::<Mana>(999))
             .unwrap_err();
         // println!("{}", err3);
         assert_eq!(err3, "no such component type exist in this storage");
