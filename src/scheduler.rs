@@ -11,10 +11,10 @@ pub enum ExecutionFrequency {
 }
 
 pub struct Command<'a> {
-    storage: &'a mut Storage,
+    storage: &'a mut ComponentTable,
 }
 impl<'a> Command<'a> {
-    pub(crate) fn new(storage: &'a mut Storage) -> Self {
+    pub(crate) fn new(storage: &'a mut ComponentTable) -> Self {
         Self { storage }
     }
 
@@ -89,7 +89,7 @@ impl System {
         }
     }
 
-    pub(crate) fn run(&self, storage: &mut Storage) {
+    pub(crate) fn run(&self, storage: &mut ComponentTable) {
         (self.func)(Command::new(storage))
     }
 

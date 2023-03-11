@@ -8,14 +8,14 @@ use scheduler::*;
 use storage::*;
 
 pub struct ECS {
-    storage: Storage,
+    storage: ComponentTable,
     scheduler: Scheduler,
 }
 
 impl ECS {
     pub fn new() -> Self {
         Self {
-            storage: Storage::new(),
+            storage: ComponentTable::new(),
             scheduler: Scheduler::new(),
         }
     }
@@ -69,7 +69,7 @@ mod test {
     #[test]
     fn type_erased_vec() {
         let vec_len = 4;
-        let mut vec = TypeErasedVec::new(Layout::new::<Player>(), vec_len);
+        let mut vec = TypeErasedColumn::new(Layout::new::<Player>(), vec_len);
 
         // add/get first one
         let mut player0 = Player("player 0");
@@ -168,7 +168,7 @@ mod test {
 
     #[test]
     fn storage() {
-        let mut storage = Storage::new();
+        let mut storage = ComponentTable::new();
 
         // add and retrieve
         let name0 = "pl 0";

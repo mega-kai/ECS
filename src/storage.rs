@@ -1,5 +1,6 @@
 use crate::component::*;
 use crate::scheduler::*;
+use std::collections::HashSet;
 use std::{alloc::Layout, collections::HashMap};
 
 trait VecHelperFunc {
@@ -31,13 +32,13 @@ pub(crate) enum Status {
     Empty,
 }
 
-pub(crate) struct TypeErasedVec {
+pub(crate) struct TypeErasedColumn {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
     pub(crate) flags: Vec<Status>,
 }
-impl TypeErasedVec {
+impl TypeErasedColumn {
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
         assert!(layout.size() != 0, "type is a ZST",);
 
@@ -113,33 +114,26 @@ impl TypeErasedVec {
     }
 }
 
-struct CompKeyGroup(Vec<ComponentKey>);
-impl CompKeyGroup {
-    pub(crate) fn new() -> Self {
-        Self(vec![])
-    }
+/// comp keys with same index are considered related;
+/// columns are type and rows are index
+pub struct ComponentTable {
+    data_hash: HashMap<ComponentID, TypeErasedColumn>,
 }
 
-pub struct Storage {
-    data_hash: HashMap<ComponentID, TypeErasedVec>,
-    graph_data: CompKeyGroup,
-}
-
-impl Storage {
+impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
-            graph_data: CompKeyGroup::new(),
         }
     }
 
-    fn ensure_access<C: Component>(&mut self) -> &mut TypeErasedVec {
+    fn ensure_access<C: Component>(&mut self) -> &mut TypeErasedColumn {
         self.data_hash
             .entry(C::id())
-            .or_insert(TypeErasedVec::new(Layout::new::<C>(), 64))
+            .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
     }
 
-    fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedVec, &'static str> {
+    fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedColumn, &'static str> {
         if let Some(access) = self.data_hash.get_mut(&C::id()) {
             Ok(access)
         } else {
@@ -191,7 +185,7 @@ impl Storage {
         &self,
         key: ComponentKey,
     ) -> Result<Vec<ComponentKey>, &'static str> {
-        self.graph_data.get(&key);
+        // self.graph_data.get(&key);
         todo!()
     }
 }
