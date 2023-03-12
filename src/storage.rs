@@ -3,47 +3,16 @@ use crate::scheduler::*;
 use std::collections::HashSet;
 use std::{alloc::Layout, collections::HashMap};
 
-trait VecHelperFunc {
-    type Target;
-    fn get_first(&self, target: <Self as VecHelperFunc>::Target) -> Option<usize>;
-    fn double_cap(&mut self);
-}
-
-impl VecHelperFunc for Vec<Status> {
-    type Target = Status;
-
-    fn get_first(&self, target: Self::Target) -> Option<usize> {
-        for (index, val) in self.iter().enumerate() {
-            if val == &target {
-                return Some(index);
-            }
-        }
-        None
-    }
-
-    fn double_cap(&mut self) {
-        self.resize(self.len() * 2, Status::Empty);
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Status {
-    Occupied,
-    Empty,
-}
-
 pub(crate) struct TypeErasedColumn {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
-    pub(crate) flags: Vec<Status>,
-    // additional info containing which index are taken
+    pub(crate) len: usize,
+    pub(crate) sparse: Vec<usize>,
 }
 impl TypeErasedColumn {
-    pub(crate) fn query_all_valid_data(&mut self) {
-        // might still need sparse set
-        // upon dense_removal the last one is moved to the spot that just got removed, and reflected in sparse
-    }
+    pub(crate) fn query_all_valid_data(&mut self) {}
+
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
         assert!(layout.size() != 0, "type is a ZST",);
 
@@ -52,16 +21,19 @@ impl TypeErasedColumn {
             layout_of_component: layout,
             data_heap_ptr,
             capacity: size,
-            flags: vec![Status::Empty; size],
+            len: 0,
+            sparse: vec![0; size],
         }
     }
 
     pub(crate) fn add(&mut self, ptr: *mut u8, row_index: usize) {
+        // recursively doing so
         if row_index >= self.capacity {
-            self.double_cap();
-            self.flags.double_cap();
+            self.double_dense_cap();
+            self.sparse.resize(self.sparse.len() * 2, 0);
         }
-        self.flags[row_index] = Status::Occupied;
+
+        self.sparse[row_index] = 0;
         unsafe {
             let raw_dst_ptr = self
                 .data_heap_ptr
@@ -86,7 +58,7 @@ impl TypeErasedColumn {
         if index >= self.capacity {
             Err("index overflow in dense vec")
         } else {
-            self.flags[index] = Status::Empty;
+            self.sparse[index] = 0;
             unsafe {
                 Ok(self
                     .data_heap_ptr
@@ -95,7 +67,7 @@ impl TypeErasedColumn {
         }
     }
 
-    fn double_cap(&mut self) {
+    fn double_dense_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
             .layout_of_component
@@ -116,20 +88,16 @@ impl TypeErasedColumn {
     }
 }
 
-/// comp keys with same index are considered related;
-/// columns are type and rows are index;
 pub struct ComponentTable {
     data_hash: HashMap<ComponentID, TypeErasedColumn>,
-    row_size: usize,
-    column_size: usize,
+    comp_group_index: usize,
 }
 
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
-            column_size: 0,
-            row_size: 0,
+            comp_group_index: 0,
         }
     }
 
@@ -148,8 +116,8 @@ impl ComponentTable {
     }
 
     pub(crate) fn insert<C: Component>(&mut self, mut component: C) -> ComponentAccess {
-        self.row_size += 1;
-        let row_index = self.row_size;
+        self.comp_group_index += 1;
+        let row_index = self.comp_group_index;
         self.ensure_access_of_type::<C>()
             .add((&mut component as *mut C).cast::<u8>(), row_index - 1);
         ComponentAccess::new_from_type::<C>(row_index - 1)
@@ -186,11 +154,28 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn query_single<C: Component>(&mut self) -> Vec<&mut C> {
-        if let Some(val) = self.data_hash.get_mut(&C::id()) {
+    pub(crate) fn query_single<C: Component>(&self) -> Vec<&mut C> {
+        if let Some(access) = self.data_hash.get(&C::id()) {
             todo!()
         } else {
-            vec![]
+            panic!("no such component type within the table")
         }
+    }
+
+    fn query_related_with_index(&self, index: usize) -> Vec<ComponentAccess> {
+        let mut vec: Vec<ComponentAccess> = vec![];
+        for (id, column) in self.data_hash.iter() {
+            if let Ok(ptr) = column.get(index) {
+                vec.push(ComponentAccess::new(index, *id, ptr));
+            } else {
+                continue;
+            }
+        }
+        vec
+    }
+
+    pub(crate) fn query_related_with_key(&mut self, key: ComponentAccess) -> Vec<ComponentAccess> {
+        let index = key.row_index;
+        self.query_related_with_index(index)
     }
 }
