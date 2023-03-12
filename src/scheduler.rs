@@ -35,8 +35,9 @@ pub struct With<C: Component> {
     phantom: PhantomData<C>,
 }
 impl<FilterComp: Component> With<FilterComp> {
-    fn apply_to<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
-        todo!()
+    fn apply_to<Target: Component>(mut vec: Vec<&mut Target>) -> Vec<&mut Target> {
+        vec.retain(|x| x.id_instance() == FilterComp::id());
+        vec
     }
 }
 pub struct Without<C: Component> {

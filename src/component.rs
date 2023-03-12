@@ -5,7 +5,7 @@ use std::{
     mem::size_of,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComponentAccess {
     pub(crate) row_index: usize,
     pub(crate) ty: ComponentID,
@@ -22,7 +22,7 @@ impl ComponentAccess {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComponentID {
     pub(crate) column_index: usize,
     pub(crate) name: &'static str,

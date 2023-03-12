@@ -148,23 +148,14 @@ impl ComponentTable {
     }
 
     pub(crate) fn insert<C: Component>(&mut self, mut component: C) -> ComponentAccess {
-        assert!(component.id_instance() == C::id(), "type inconsistent");
         self.row_size += 1;
-        let num = self.row_size;
+        let row_index = self.row_size;
         self.ensure_access_of_type::<C>()
-            .add((&mut component as *mut C).cast::<u8>(), num - 1);
-        ComponentAccess::new_from_type::<C>(num - 1)
+            .add((&mut component as *mut C).cast::<u8>(), row_index - 1);
+        ComponentAccess::new_from_type::<C>(row_index - 1)
     }
 
     pub(crate) fn link(&mut self, key1: ComponentAccess, key2: ComponentAccess) {
-        todo!()
-    }
-
-    pub(crate) fn add_component_to_a_linked_group_from_any_key_from_that_group<C: Component>(
-        &mut self,
-        key: ComponentAccess,
-        mut component: C,
-    ) -> Result<ComponentAccess, &'static str> {
         todo!()
     }
 
@@ -201,13 +192,5 @@ impl ComponentTable {
         } else {
             vec![]
         }
-    }
-
-    pub(crate) fn get_associated_comps(
-        &self,
-        key: ComponentAccess,
-    ) -> Result<Vec<ComponentAccess>, &'static str> {
-        // self.graph_data.get(&key);
-        todo!()
     }
 }
