@@ -11,9 +11,16 @@ pub(crate) struct TypeErasedColumn {
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
-    pub(crate) fn query_all_dense_ptr(&mut self) -> Vec<*mut u8> {
-        let vec: Vec<*mut u8> = vec![];
-        todo!()
+    pub(crate) fn query_all_dense_ptr(&self) -> Vec<*mut u8> {
+        let mut vec: Vec<*mut u8> = vec![];
+        for index in 0..self.len {
+            let ptr = unsafe {
+                self.data_heap_ptr
+                    .add(index * self.layout_of_component.size())
+            };
+            vec.push(ptr);
+        }
+        vec
     }
 
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
@@ -168,7 +175,11 @@ impl ComponentTable {
 
     pub(crate) fn query_single<C: Component>(&self) -> Vec<&mut C> {
         if let Some(access) = self.data_hash.get(&C::id()) {
-            todo!()
+            let mut u8_vec = access.query_all_dense_ptr();
+            u8_vec
+                .iter_mut()
+                .map(|x| unsafe { x.cast::<C>().as_mut().unwrap() })
+                .collect()
         } else {
             panic!("no such component type within the table")
         }
