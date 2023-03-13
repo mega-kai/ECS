@@ -109,6 +109,7 @@ impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
+            // 0 would be reserved
             current_entity_id: 0,
         }
     }

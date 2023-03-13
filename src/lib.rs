@@ -52,5 +52,8 @@ mod test {
 
     fn system(mut command: Command) {
         command.add_component(Player("uwu"));
+        for val in command.query::<Player, ()>() {
+            println!("{}", val.0);
+        }
     }
 }

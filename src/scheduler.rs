@@ -18,8 +18,8 @@ impl<'a> Command<'a> {
         Self { storage }
     }
 
-    pub fn add_component<C: Component>(&mut self, component: C) {
-        self.storage.insert(component);
+    pub fn add_component<C: Component>(&mut self, component: C) -> ComponentAccess {
+        self.storage.insert(component)
     }
 
     pub fn remove_component<C: Component>(&mut self, key: ComponentAccess) -> C {
@@ -60,6 +60,12 @@ impl<FilterComp: Component> Filter for With<FilterComp> {
 impl<FilterComp: Component> Filter for Without<FilterComp> {
     fn apply_on<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
         Without::<FilterComp>::apply_to::<Target>(vec)
+    }
+}
+impl Filter for () {
+    fn apply_on<Target: Component>(vec: Vec<&mut Target>) -> Vec<&mut Target> {
+        // vec![]
+        todo!()
     }
 }
 
