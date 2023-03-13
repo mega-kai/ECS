@@ -7,23 +7,23 @@ use std::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentAccess {
-    pub(crate) row_index: usize,
+    pub(crate) entity_id: usize,
     pub(crate) ty: ComponentID,
     pub(crate) access: *mut u8,
 }
 impl ComponentAccess {
     pub(crate) fn new_from_type<C: Component>(index: usize) -> Self {
         Self {
-            row_index: index,
+            entity_id: index,
             //generation: usize,
             ty: ComponentID::new::<C>(),
             access: Layout::new::<u8>().dangling().as_ptr(),
         }
     }
 
-    pub(crate) fn new(row_index: usize, ty: ComponentID, access: *mut u8) -> Self {
+    pub(crate) fn new(entity_id: usize, ty: ComponentID, access: *mut u8) -> Self {
         Self {
-            row_index,
+            entity_id,
             ty,
             access,
         }
@@ -37,16 +37,14 @@ impl ComponentAccess {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
-    pub(crate) column_index: usize,
     pub(crate) name: &'static str,
-    pub(crate) id: TypeId,
+    pub(crate) type_id: TypeId,
 }
 impl ComponentID {
     pub(crate) fn new<C: Component>() -> Self {
         Self {
             name: type_name::<C>(),
-            id: TypeId::of::<C>(),
-            column_index: 0,
+            type_id: TypeId::of::<C>(),
         }
     }
 }
@@ -55,16 +53,14 @@ pub trait Component: Clone + 'static {
     fn id() -> ComponentID {
         ComponentID {
             name: type_name::<Self>(),
-            id: TypeId::of::<Self>(),
-            column_index: 0,
+            type_id: TypeId::of::<Self>(),
         }
     }
 
     fn id_instance(&self) -> ComponentID {
         ComponentID {
             name: type_name::<Self>(),
-            id: TypeId::of::<Self>(),
-            column_index: 0,
+            type_id: TypeId::of::<Self>(),
         }
     }
 
