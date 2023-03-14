@@ -27,7 +27,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
-        F::apply_on(self.storage.query_single::<C>())
+        todo!()
     }
 }
 
@@ -36,8 +36,7 @@ pub struct With<C: Component> {
 }
 impl<FilterComp: Component> With<FilterComp> {
     fn apply_to<Target: Component>(mut vec: Vec<&mut Target>) -> Vec<&mut Target> {
-        vec.retain(|x| x.id_instance() == FilterComp::id());
-        vec
+        vec.into_iter().map(|x| x).collect()
     }
 }
 pub struct Without<C: Component> {

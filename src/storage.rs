@@ -11,16 +11,16 @@ pub(crate) struct TypeErasedColumn {
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
-    pub(crate) fn query_all_dense_ptr(&self) -> Vec<*mut u8> {
-        let mut vec: Vec<*mut u8> = vec![];
-        for index in 0..self.len {
-            let ptr = unsafe {
-                self.data_heap_ptr
-                    .add(index * self.layout_of_component.size())
-            };
-            vec.push(ptr);
+    pub(crate) fn query_all_dense_ptr_with_sparse_entity_id(&self) -> Vec<(usize, *mut u8)> {
+        let mut result_vec: Vec<(usize, *mut u8)> = vec![];
+        for val in self.sparse.iter() {
+            if let Some(current_id) = val {
+                result_vec.push((*current_id, unsafe { self.get(*current_id).unwrap() }));
+            } else {
+                continue;
+            }
         }
-        vec
+        result_vec
     }
 
     pub(crate) fn new(layout: Layout, size: usize) -> Self {
@@ -36,7 +36,7 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) {
+    pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) -> *mut u8 {
         if entity_id >= self.sparse.len() {
             self.sparse.resize(entity_id + 1, None);
         }
@@ -52,6 +52,7 @@ impl TypeErasedColumn {
                 .data_heap_ptr
                 .add(self.len * self.layout_of_component.size());
             std::ptr::copy(ptr, raw_dst_ptr, self.layout_of_component.size());
+            raw_dst_ptr
         }
     }
 
@@ -131,9 +132,10 @@ impl ComponentTable {
     pub(crate) fn insert<C: Component>(&mut self, mut component: C) -> ComponentAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
-        self.ensure_access_of_type::<C>()
+        let dst_ptr = self
+            .ensure_access_of_type::<C>()
             .add((&mut component as *mut C).cast::<u8>(), new_entity_id - 1);
-        ComponentAccess::new_from_type::<C>(new_entity_id - 1)
+        ComponentAccess::new(new_entity_id - 1, ComponentID::new::<C>(), dst_ptr)
     }
 
     pub(crate) fn link(&mut self, key1: ComponentAccess, key2: ComponentAccess) {
@@ -174,19 +176,20 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn query_single<C: Component>(&self) -> Vec<&mut C> {
+    pub(crate) fn query_single_from_type<C: Component>(&self) -> Vec<ComponentAccess> {
         if let Some(access) = self.data_hash.get(&C::id()) {
-            let mut u8_vec = access.query_all_dense_ptr();
-            u8_vec
-                .iter_mut()
-                .map(|x| unsafe { x.cast::<C>().as_mut().unwrap() })
-                .collect()
+            let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
+            let mut result_access_vec: Vec<ComponentAccess> = vec![];
+            for val in raw_vec {
+                todo!()
+            }
+            result_access_vec
         } else {
             panic!("no such component type within the table")
         }
     }
 
-    fn query_related_with_index(&self, entity_id: usize) -> Vec<ComponentAccess> {
+    fn query_related_from_index(&self, entity_id: usize) -> Vec<ComponentAccess> {
         let mut vec: Vec<ComponentAccess> = vec![];
         for (id, column) in self.data_hash.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
@@ -200,6 +203,6 @@ impl ComponentTable {
 
     pub(crate) fn query_related_with_key(&mut self, key: ComponentAccess) -> Vec<ComponentAccess> {
         let index = key.entity_id;
-        self.query_related_with_index(index)
+        self.query_related_from_index(index)
     }
 }

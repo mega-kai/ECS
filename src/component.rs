@@ -12,15 +12,6 @@ pub struct ComponentAccess {
     pub(crate) access: *mut u8,
 }
 impl ComponentAccess {
-    pub(crate) fn new_from_type<C: Component>(index: usize) -> Self {
-        Self {
-            entity_id: index,
-            //generation: usize,
-            ty: ComponentID::new::<C>(),
-            access: Layout::new::<u8>().dangling().as_ptr(),
-        }
-    }
-
     pub(crate) fn new(entity_id: usize, ty: ComponentID, access: *mut u8) -> Self {
         Self {
             entity_id,
