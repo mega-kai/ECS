@@ -27,9 +27,12 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
-        let access_vec = self.storage.query_single_from_type::<C>();
-
-        todo!()
+        let mut access_vec = <F as Filter>::apply_on(self.storage.query_single_from_type::<C>());
+        let mut result: Vec<&mut C> = vec![];
+        for val in access_vec {
+            result.push(unsafe { val.cast::<C>() });
+        }
+        result
     }
 }
 
@@ -37,7 +40,7 @@ pub struct With<C: Component> {
     phantom: PhantomData<C>,
 }
 impl<FilterComp: Component> With<FilterComp> {
-    fn apply_to(mut vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
+    fn apply_with_filter(mut vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
         vec.retain(|x| true);
         vec
     }
@@ -46,7 +49,7 @@ pub struct Without<C: Component> {
     phantom: PhantomData<C>,
 }
 impl<FilterComp: Component> Without<FilterComp> {
-    fn apply_to(mut vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
+    fn apply_without_filter(mut vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
         vec.retain(|x| true);
         vec
     }
@@ -57,12 +60,12 @@ pub trait Filter: Sized {
 }
 impl<FilterComp: Component> Filter for With<FilterComp> {
     fn apply_on(vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
-        With::<FilterComp>::apply_to(vec)
+        With::<FilterComp>::apply_with_filter(vec)
     }
 }
 impl<FilterComp: Component> Filter for Without<FilterComp> {
     fn apply_on(vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
-        Without::<FilterComp>::apply_to(vec)
+        Without::<FilterComp>::apply_without_filter(vec)
     }
 }
 impl Filter for () {
