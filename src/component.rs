@@ -8,14 +8,14 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentAccess {
     pub(crate) entity_id: usize,
-    pub(crate) ty: ComponentID,
+    pub(crate) id: ComponentID,
     pub(crate) access: *mut u8,
 }
 impl ComponentAccess {
     pub(crate) fn new(entity_id: usize, ty: ComponentID, access: *mut u8) -> Self {
         Self {
             entity_id,
-            ty,
+            id: ty,
             access,
         }
     }
@@ -28,6 +28,7 @@ impl ComponentAccess {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
+    // for debugging
     pub(crate) name: &'static str,
     pub(crate) type_id: TypeId,
 }

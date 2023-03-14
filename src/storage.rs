@@ -146,7 +146,7 @@ impl ComponentTable {
         &mut self,
         key: ComponentAccess,
     ) -> Result<&mut C, &'static str> {
-        if C::id() != key.ty {
+        if C::id() != key.id {
             return Err("generic and the key don't match");
         }
         let access = self.try_access::<C>()?;
@@ -180,8 +180,8 @@ impl ComponentTable {
         if let Some(access) = self.data_hash.get(&C::id()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec: Vec<ComponentAccess> = vec![];
-            for val in raw_vec {
-                todo!()
+            for (index, ptr) in raw_vec {
+                result_access_vec.push(ComponentAccess::new(index, ComponentID::new::<C>(), ptr));
             }
             result_access_vec
         } else {
@@ -201,7 +201,7 @@ impl ComponentTable {
         vec
     }
 
-    pub(crate) fn query_related_with_key(&mut self, key: ComponentAccess) -> Vec<ComponentAccess> {
+    pub(crate) fn query_related_with_key(&self, key: ComponentAccess) -> Vec<ComponentAccess> {
         let index = key.entity_id;
         self.query_related_from_index(index)
     }
