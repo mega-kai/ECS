@@ -29,7 +29,7 @@ impl ComponentAccess {
         }
     }
 
-    pub(crate) fn cast<C: Component>(&self) -> &mut C {
+    pub(crate) unsafe fn cast<C: Component>(&self) -> &mut C {
         // assert_eq!(C::id(), self.ty);
         unsafe { self.access.cast::<C>().as_mut().unwrap() }
     }
@@ -64,47 +64,16 @@ pub trait Component: Clone + 'static {
         }
     }
 
-    fn layout(&self) -> Layout {
-        Layout::new::<Self>()
-    }
+    // fn layout() -> Layout {
+    //     Layout::new::<Self>()
+    // }
 
-    fn size(&self) -> usize {
-        size_of::<Self>()
-    }
+    // fn size() -> usize {
+    //     size_of::<Self>()
+    // }
 }
 
 impl<C0: Component> Component for (C0,) {}
 impl<C0: Component, C1: Component> Component for (C0, C1) {}
 impl<C0: Component, C1: Component, C2: Component> Component for (C0, C1, C2) {}
 impl<C0: Component, C1: Component, C2: Component, C3: Component> Component for (C0, C1, C2, C3) {}
-impl<C0: Component, C1: Component, C2: Component, C3: Component, C4: Component> Component
-    for (C0, C1, C2, C3, C4)
-{
-}
-impl<C0: Component, C1: Component, C2: Component, C3: Component, C4: Component, C5: Component>
-    Component for (C0, C1, C2, C3, C4, C5)
-{
-}
-impl<
-        C0: Component,
-        C1: Component,
-        C2: Component,
-        C3: Component,
-        C4: Component,
-        C5: Component,
-        C6: Component,
-    > Component for (C0, C1, C2, C3, C4, C5, C6)
-{
-}
-impl<
-        C0: Component,
-        C1: Component,
-        C2: Component,
-        C3: Component,
-        C4: Component,
-        C5: Component,
-        C6: Component,
-        C7: Component,
-    > Component for (C0, C1, C2, C3, C4, C5, C6, C7)
-{
-}
