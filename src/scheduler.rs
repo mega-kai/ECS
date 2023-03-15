@@ -36,18 +36,15 @@ impl<'a> Command<'a> {
     }
 }
 
-pub struct With<C: Component> {
-    phantom: PhantomData<C>,
-}
+pub struct With<C: Component>(PhantomData<C>);
 impl<FilterComp: Component> With<FilterComp> {
     fn apply_with_filter(mut vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
         vec.retain(|x| true);
         vec
     }
 }
-pub struct Without<C: Component> {
-    phantom: PhantomData<C>,
-}
+
+pub struct Without<C: Component>(PhantomData<C>);
 impl<FilterComp: Component> Without<FilterComp> {
     fn apply_without_filter(mut vec: Vec<ComponentAccess>) -> Vec<ComponentAccess> {
         vec.retain(|x| true);
