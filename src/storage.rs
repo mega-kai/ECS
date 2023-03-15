@@ -129,6 +129,7 @@ impl ComponentTable {
         }
     }
 
+    // should be insert multiple with [C]
     pub(crate) fn insert<C: Component>(&mut self, mut component: C) -> ComponentAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
@@ -138,27 +139,35 @@ impl ComponentTable {
         ComponentAccess::new(new_entity_id - 1, ComponentID::new::<C>(), dst_ptr)
     }
 
-    pub(crate) fn link(&mut self, key1: ComponentAccess, key2: ComponentAccess) {
+    pub(crate) fn add_link<C: Component>(
+        &mut self,
+        linked: ComponentAccess,
+        comp: C,
+    ) -> Result<ComponentAccess, &'static str> {
         todo!()
     }
 
-    pub(crate) fn get_as<C: Component>(
-        &mut self,
-        key: ComponentAccess,
-    ) -> Result<&mut C, &'static str> {
-        if C::id() != key.id {
-            return Err("generic and the key don't match");
-        }
-        let access = self.try_access::<C>()?;
-        unsafe {
-            Ok(access
-                .get(key.entity_id)
-                .unwrap()
-                .cast::<C>()
-                .as_mut()
-                .unwrap())
-        }
+    pub(crate) fn link_multiple(&self, linked: ComponentAccess) {
+        todo!()
     }
+
+    // pub(crate) fn get_as<C: Component>(
+    //     &mut self,
+    //     key: ComponentAccess,
+    // ) -> Result<&mut C, &'static str> {
+    //     if C::id() != key.id {
+    //         return Err("generic and the key don't match");
+    //     }
+    //     let access = self.try_access::<C>()?;
+    //     unsafe {
+    //         Ok(access
+    //             .get(key.entity_id)
+    //             .unwrap()
+    //             .cast::<C>()
+    //             .as_mut()
+    //             .unwrap())
+    //     }
+    // }
 
     pub(crate) fn remove_as<C: Component>(
         &mut self,
@@ -189,7 +198,7 @@ impl ComponentTable {
         }
     }
 
-    fn query_related_from_index(&self, entity_id: usize) -> Vec<ComponentAccess> {
+    pub(crate) fn query_accesses_with_same_id(&self, entity_id: usize) -> Vec<ComponentAccess> {
         let mut vec: Vec<ComponentAccess> = vec![];
         for (id, column) in self.data_hash.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
@@ -201,8 +210,7 @@ impl ComponentTable {
         vec
     }
 
-    pub(crate) fn query_related_with_key(&self, key: ComponentAccess) -> Vec<ComponentAccess> {
-        let index = key.entity_id;
-        self.query_related_from_index(index)
+    pub(crate) fn query_related_types_with_id(&self, access: ComponentAccess) -> Vec<ComponentID> {
+        todo!()
     }
 }
