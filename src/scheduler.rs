@@ -30,7 +30,7 @@ impl<'a> Command<'a> {
         let mut access_vec = <F as Filter>::apply_on(self.storage.query_single_from_type::<C>());
         let mut result: Vec<&mut C> = vec![];
         for val in access_vec {
-            result.push(unsafe { val.cast::<C>() });
+            result.push(unsafe { val.access.cast::<C>().as_mut().unwrap() });
         }
         result
     }

@@ -19,11 +19,6 @@ impl ComponentAccess {
             access,
         }
     }
-
-    pub(crate) unsafe fn cast<C: Component>(&self) -> &mut C {
-        // assert_eq!(C::id(), self.ty);
-        self.access.cast::<C>().as_mut().unwrap()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
