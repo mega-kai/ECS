@@ -44,7 +44,7 @@ impl<FilterComp: Component> With<FilterComp> {
         mut vec: Vec<ComponentAccess>,
         storage: &mut ComponentTable,
     ) -> Vec<ComponentAccess> {
-        // vec.retain(|x| storage.query_related_from_index(x.entity_id).contains(x));
+        vec.retain(|x| storage.query_accesses_with_same_id(x.entity_id).contains(x));
         // vec
         todo!()
     }

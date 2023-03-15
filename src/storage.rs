@@ -139,36 +139,6 @@ impl ComponentTable {
         ComponentAccess::new(new_entity_id - 1, ComponentID::new::<C>(), dst_ptr)
     }
 
-    pub(crate) fn add_link<C: Component>(
-        &mut self,
-        linked: ComponentAccess,
-        comp: C,
-    ) -> Result<ComponentAccess, &'static str> {
-        todo!()
-    }
-
-    pub(crate) fn link_multiple(&self, linked: ComponentAccess) {
-        todo!()
-    }
-
-    // pub(crate) fn get_as<C: Component>(
-    //     &mut self,
-    //     key: ComponentAccess,
-    // ) -> Result<&mut C, &'static str> {
-    //     if C::id() != key.id {
-    //         return Err("generic and the key don't match");
-    //     }
-    //     let access = self.try_access::<C>()?;
-    //     unsafe {
-    //         Ok(access
-    //             .get(key.entity_id)
-    //             .unwrap()
-    //             .cast::<C>()
-    //             .as_mut()
-    //             .unwrap())
-    //     }
-    // }
-
     pub(crate) fn remove_as<C: Component>(
         &mut self,
         key: ComponentAccess,
@@ -183,6 +153,18 @@ impl ComponentTable {
                 .cloned()
                 .unwrap())
         }
+    }
+
+    pub(crate) fn add_link<C: Component>(
+        &mut self,
+        linked: ComponentAccess,
+        comp: C,
+    ) -> Result<ComponentAccess, &'static str> {
+        todo!()
+    }
+
+    pub(crate) fn link_multiple(&self, linked: ComponentAccess) {
+        todo!()
     }
 
     pub(crate) fn query_single_from_type<C: Component>(&self) -> Vec<ComponentAccess> {
@@ -208,9 +190,5 @@ impl ComponentTable {
             }
         }
         vec
-    }
-
-    pub(crate) fn query_related_types_with_id(&self, access: ComponentAccess) -> Vec<ComponentID> {
-        todo!()
     }
 }
