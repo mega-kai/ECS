@@ -115,14 +115,14 @@ impl<'a> IntoIterator for &'a mut AccessRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompType {
     // for debugging
-    pub(crate) name: &'static str,
     pub(crate) type_id: TypeId,
+    pub(crate) layout: Layout,
 }
 impl CompType {
     pub(crate) fn new<C: Component>() -> Self {
         Self {
-            name: type_name::<C>(),
             type_id: TypeId::of::<C>(),
+            layout: Layout::new::<C>(),
         }
     }
 }
@@ -130,14 +130,14 @@ impl CompType {
 pub trait Component: Clone + 'static {
     fn comp_type() -> CompType {
         CompType {
-            name: type_name::<Self>(),
             type_id: TypeId::of::<Self>(),
+            layout: Layout::new::<Self>(),
         }
     }
 }
 
 pub(crate) struct TypeErasedColumn {
-    layout_of_component: Layout,
+    comp_type: CompType,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
     pub(crate) len: usize,
@@ -156,12 +156,12 @@ impl TypeErasedColumn {
         result_vec
     }
 
-    pub(crate) fn new(layout: Layout, size: usize) -> Self {
-        assert!(layout.size() != 0, "type is a ZST",);
+    pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
+        assert!(comp_type.layout.size() != 0, "type is a ZST",);
 
-        let data_heap_ptr = unsafe { std::alloc::alloc(layout.repeat(size).unwrap().0) };
+        let data_heap_ptr = unsafe { std::alloc::alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
-            layout_of_component: layout,
+            comp_type,
             data_heap_ptr,
             capacity: size,
             len: 0,
@@ -183,8 +183,8 @@ impl TypeErasedColumn {
         unsafe {
             let raw_dst_ptr = self
                 .data_heap_ptr
-                .add(self.len * self.layout_of_component.size());
-            std::ptr::copy(ptr, raw_dst_ptr, self.layout_of_component.size());
+                .add(self.len * self.comp_type.layout.size());
+            std::ptr::copy(ptr, raw_dst_ptr, self.comp_type.layout.size());
             raw_dst_ptr
         }
     }
@@ -195,7 +195,7 @@ impl TypeErasedColumn {
         } else {
             Some(
                 self.data_heap_ptr
-                    .add(entity_id * self.layout_of_component.size()),
+                    .add(entity_id * self.comp_type.layout.size()),
             )
         }
     }
@@ -206,23 +206,22 @@ impl TypeErasedColumn {
         } else {
             let num = self.sparse[entity_id].unwrap();
             self.sparse[entity_id] = None;
-            Some(
-                self.data_heap_ptr
-                    .add(num * self.layout_of_component.size()),
-            )
+            Some(self.data_heap_ptr.add(num * self.comp_type.layout.size()))
         }
     }
 
     fn double_dense_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
-            .layout_of_component
+            .comp_type
+            .layout
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = unsafe {
             std::alloc::realloc(
                 self.data_heap_ptr,
-                self.layout_of_component
+                self.comp_type
+                    .layout
                     .repeat(self.capacity)
                     .expect("could not repeat layout")
                     .0,
@@ -249,7 +248,7 @@ impl ComponentTable {
         }
     }
 
-    fn ensure_access_of_type<C: Component>(&mut self) -> &mut TypeErasedColumn {
+    fn ensure_access_of_type(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
         self.hash_table
             .entry(C::comp_type())
             .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
@@ -267,7 +266,7 @@ impl ComponentTable {
         todo!()
     }
 
-    pub(crate) fn insert_row_slice_on_index(
+    pub(crate) fn try_insert_row_slice_on_index(
         &mut self,
         dst_entity_index: usize,
         slice: &[u8],
