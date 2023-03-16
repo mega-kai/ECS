@@ -527,8 +527,19 @@ impl ECS {
         }
     }
 
-    pub fn add_system(&mut self, system: System) {
-        self.scheduler.add_system(system);
+    pub fn add_system(&mut self, func: fn(Command), order: usize, once: bool) {
+        match once {
+            true => self.scheduler.add_system(System {
+                order,
+                frequency: ExecutionFrequency::Once(false),
+                func,
+            }),
+            false => self.scheduler.add_system(System {
+                order,
+                frequency: ExecutionFrequency::Always,
+                func,
+            }),
+        }
     }
 
     pub fn tick(&mut self) {
@@ -584,12 +595,12 @@ mod test {
     #[test]
     fn test() {
         let mut app = ECS::new();
-        app.add_system(System::new(0, ExecutionFrequency::Once(false), spawn));
-        app.add_system(System::new(1, ExecutionFrequency::Always, system));
+        app.add_system(spawn, 0, true);
+        app.add_system(system, 1, false);
 
         app.tick();
 
-        app.add_system(System::new(2, ExecutionFrequency::Once(false), remove));
+        app.add_system(remove, 2, true);
         app.tick();
         app.tick();
         app.tick();
