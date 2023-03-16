@@ -31,25 +31,25 @@ impl TableCellAccess {
 }
 
 // all with the same component type
-pub struct AccessVec(pub(crate) Vec<TableCellAccess>);
-impl AccessVec {
-    pub(crate) fn new(access_vec: Vec<TableCellAccess>) -> Self {
-        Self(access_vec)
+pub struct AccessColumn(pub(crate) Vec<TableCellAccess>, pub(crate) CompType);
+impl AccessColumn {
+    pub(crate) fn new<C: Component>(access_vec: Vec<TableCellAccess>) -> Self {
+        Self(access_vec, C::id())
     }
 
-    pub(crate) fn new_empty() -> Self {
-        Self(vec![])
+    pub(crate) fn new_empty<C: Component>() -> Self {
+        Self(vec![], C::id())
     }
 
     pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
         // on the promise that all accesses of this vec share the same type
-        assert_eq!(C::id(), self.0[0].column_index);
+        // assert_eq!(C::id(), self.0[0].column_index);
         self.into_iter()
             .map(|x| unsafe { x.cast::<C>() })
             .collect::<Vec<&mut C>>()
     }
 }
-impl IntoIterator for AccessVec {
+impl IntoIterator for AccessColumn {
     type Item = TableCellAccess;
 
     type IntoIter = std::vec::IntoIter<TableCellAccess>;
@@ -58,7 +58,7 @@ impl IntoIterator for AccessVec {
         self.0.into_iter()
     }
 }
-impl<'a> IntoIterator for &'a AccessVec {
+impl<'a> IntoIterator for &'a AccessColumn {
     type Item = &'a TableCellAccess;
 
     type IntoIter = std::slice::Iter<'a, TableCellAccess>;
@@ -67,7 +67,46 @@ impl<'a> IntoIterator for &'a AccessVec {
         self.0.iter()
     }
 }
-impl<'a> IntoIterator for &'a mut AccessVec {
+impl<'a> IntoIterator for &'a mut AccessColumn {
+    type Item = &'a mut TableCellAccess;
+
+    type IntoIter = std::slice::IterMut<'a, TableCellAccess>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+// all with the same id and and must have diff types
+pub struct AccessRow(pub(crate) Vec<TableCellAccess>, pub(crate) usize);
+impl AccessRow {
+    pub(crate) fn new(access_vec: Vec<TableCellAccess>, entity_id: usize) -> Self {
+        Self(access_vec, entity_id)
+    }
+
+    pub(crate) fn new_empty(entity_id: usize) -> Self {
+        Self(vec![], entity_id)
+    }
+}
+impl IntoIterator for AccessRow {
+    type Item = TableCellAccess;
+
+    type IntoIter = std::vec::IntoIter<TableCellAccess>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a AccessRow {
+    type Item = &'a TableCellAccess;
+
+    type IntoIter = std::slice::Iter<'a, TableCellAccess>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl<'a> IntoIterator for &'a mut AccessRow {
     type Item = &'a mut TableCellAccess;
 
     type IntoIter = std::slice::IterMut<'a, TableCellAccess>;
@@ -277,10 +316,10 @@ impl ComponentTable {
         todo!()
     }
 
-    pub(crate) fn query_single_from_type<C: Component>(&self) -> AccessVec {
+    pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
         if let Some(access) = self.data_hash.get(&C::id()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
-            let mut result_access_vec = AccessVec::new_empty();
+            let mut result_access_vec = AccessColumn::new_empty::<C>();
             for (index, ptr) in raw_vec {
                 result_access_vec
                     .0
@@ -292,8 +331,8 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn query_accesses_with_same_id(&self, entity_id: usize) -> AccessVec {
-        let mut vec = AccessVec::new_empty();
+    pub(crate) fn query_row(&self, entity_id: usize) -> AccessRow {
+        let mut vec = AccessRow::new_empty(entity_id);
         for (id, column) in self.data_hash.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
                 vec.0.push(TableCellAccess::new(entity_id, *id, ptr));
@@ -316,9 +355,12 @@ pub enum ExecutionFrequency {
 pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(mut vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+    pub(crate) fn apply_with_filter(
+        mut vec: AccessColumn,
+        table: &mut ComponentTable,
+    ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.query_accesses_with_same_id(x.row_index) {
+            for val in table.query_row(x.row_index) {
                 if val.column_index == FilterComp::id() {
                     return true;
                 }
@@ -332,11 +374,11 @@ impl<FilterComp: Component> With<FilterComp> {
 pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> Without<FilterComp> {
     pub(crate) fn apply_without_filter(
-        mut vec: AccessVec,
+        mut vec: AccessColumn,
         table: &mut ComponentTable,
-    ) -> AccessVec {
+    ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.query_accesses_with_same_id(x.row_index) {
+            for val in table.query_row(x.row_index) {
                 if val.column_index == FilterComp::id() {
                     return false;
                 }
@@ -348,20 +390,20 @@ impl<FilterComp: Component> Without<FilterComp> {
 }
 
 pub trait Filter: Sized {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec;
+    fn apply_on(vec: AccessColumn, table: &mut ComponentTable) -> AccessColumn;
 }
 impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+    fn apply_on(vec: AccessColumn, table: &mut ComponentTable) -> AccessColumn {
         With::<FilterComp>::apply_with_filter(vec, table)
     }
 }
 impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+    fn apply_on(vec: AccessColumn, table: &mut ComponentTable) -> AccessColumn {
         Without::<FilterComp>::apply_without_filter(vec, table)
     }
 }
 impl Filter for () {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+    fn apply_on(vec: AccessColumn, table: &mut ComponentTable) -> AccessColumn {
         vec
     }
 }
@@ -387,8 +429,8 @@ impl<'a> Command<'a> {
         self.table.remove_as::<C>(key).unwrap()
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> AccessVec {
-        <F as Filter>::apply_on(self.table.query_single_from_type::<C>(), self.table)
+    pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
+        <F as Filter>::apply_on(self.table.query_column::<C>(), self.table)
     }
 }
 
