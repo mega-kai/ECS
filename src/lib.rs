@@ -9,30 +9,31 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ComponentAccess {
-    pub(crate) entity_id: usize,
-    pub(crate) id: ComponentID,
+pub struct TableCellAccess {
+    pub(crate) row_index: usize,
+    pub(crate) column_index: ComponentID,
     pub(crate) access: *mut u8,
 }
-impl ComponentAccess {
+impl TableCellAccess {
     pub(crate) fn new(entity_id: usize, ty: ComponentID, access: *mut u8) -> Self {
         Self {
-            entity_id,
-            id: ty,
+            row_index: entity_id,
+            column_index: ty,
             access,
         }
     }
 
     // not recommended
     pub unsafe fn cast<C: Component>(&self) -> &mut C {
-        assert_eq!(C::id(), self.id);
+        assert_eq!(C::id(), self.column_index);
         self.access.cast::<C>().as_mut().unwrap()
     }
 }
 
-pub struct AccessVec(pub(crate) Vec<ComponentAccess>);
+// all with the same component type
+pub struct AccessVec(pub(crate) Vec<TableCellAccess>);
 impl AccessVec {
-    pub(crate) fn new(access_vec: Vec<ComponentAccess>) -> Self {
+    pub(crate) fn new(access_vec: Vec<TableCellAccess>) -> Self {
         Self(access_vec)
     }
 
@@ -41,31 +42,36 @@ impl AccessVec {
     }
 
     pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
-        todo!()
+        assert!(!self.0.is_empty());
+        // on the promise that all accesses of this vec share the same type
+        assert_eq!(C::id(), self.0[0].column_index);
+        self.into_iter()
+            .map(|x| unsafe { x.cast::<C>() })
+            .collect::<Vec<&mut C>>()
     }
 }
 impl IntoIterator for AccessVec {
-    type Item = ComponentAccess;
+    type Item = TableCellAccess;
 
-    type IntoIter = std::vec::IntoIter<ComponentAccess>;
+    type IntoIter = std::vec::IntoIter<TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 impl<'a> IntoIterator for &'a AccessVec {
-    type Item = &'a ComponentAccess;
+    type Item = &'a TableCellAccess;
 
-    type IntoIter = std::slice::Iter<'a, ComponentAccess>;
+    type IntoIter = std::slice::Iter<'a, TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
 }
 impl<'a> IntoIterator for &'a mut AccessVec {
-    type Item = &'a mut ComponentAccess;
+    type Item = &'a mut TableCellAccess;
 
-    type IntoIter = std::slice::IterMut<'a, ComponentAccess>;
+    type IntoIter = std::slice::IterMut<'a, TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter_mut()
@@ -235,23 +241,23 @@ impl ComponentTable {
     }
 
     // should be insert multiple with [C]
-    pub(crate) fn add_new_entity<C: Component>(&mut self, mut component: C) -> ComponentAccess {
+    pub(crate) fn add_new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
         let dst_ptr = self
             .ensure_access_of_type::<C>()
             .add((&mut component as *mut C).cast::<u8>(), new_entity_id - 1);
-        ComponentAccess::new(new_entity_id - 1, ComponentID::new::<C>(), dst_ptr)
+        TableCellAccess::new(new_entity_id - 1, ComponentID::new::<C>(), dst_ptr)
     }
 
     pub(crate) fn remove_as<C: Component>(
         &mut self,
-        key: ComponentAccess,
+        key: TableCellAccess,
     ) -> Result<C, &'static str> {
         unsafe {
             Ok(self
                 .try_access::<C>()?
-                .remove(key.entity_id)
+                .remove(key.row_index)
                 .unwrap()
                 .cast::<C>()
                 .as_mut()
@@ -264,7 +270,7 @@ impl ComponentTable {
         &mut self,
         entity_id: usize,
         comp: C,
-    ) -> Result<ComponentAccess, &'static str> {
+    ) -> Result<TableCellAccess, &'static str> {
         todo!()
     }
 
@@ -279,7 +285,7 @@ impl ComponentTable {
             for (index, ptr) in raw_vec {
                 result_access_vec
                     .0
-                    .push(ComponentAccess::new(index, ComponentID::new::<C>(), ptr));
+                    .push(TableCellAccess::new(index, ComponentID::new::<C>(), ptr));
             }
             result_access_vec
         } else {
@@ -291,7 +297,7 @@ impl ComponentTable {
         let mut vec = AccessVec::new_empty();
         for (id, column) in self.data_hash.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
-                vec.0.push(ComponentAccess::new(entity_id, *id, ptr));
+                vec.0.push(TableCellAccess::new(entity_id, *id, ptr));
             } else {
                 continue;
             }
@@ -316,11 +322,11 @@ impl<'a> Command<'a> {
         Self { storage }
     }
 
-    pub fn add_component<C: Component>(&mut self, component: C) -> ComponentAccess {
+    pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
         self.storage.add_new_entity(component)
     }
 
-    pub fn remove_component<C: Component>(&mut self, key: ComponentAccess) -> C {
+    pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
         self.storage.remove_as::<C>(key).unwrap()
     }
 
@@ -340,8 +346,8 @@ impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
     pub(crate) fn apply_with_filter(mut vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
         vec.0.retain(|x| {
-            for val in storage.query_accesses_with_same_id(x.entity_id) {
-                if val.id == FilterComp::id() {
+            for val in storage.query_accesses_with_same_id(x.row_index) {
+                if val.column_index == FilterComp::id() {
                     return true;
                 }
             }
@@ -358,8 +364,8 @@ impl<FilterComp: Component> Without<FilterComp> {
         storage: &mut ComponentTable,
     ) -> AccessVec {
         vec.0.retain(|x| {
-            for val in storage.query_accesses_with_same_id(x.entity_id) {
-                if val.id == FilterComp::id() {
+            for val in storage.query_accesses_with_same_id(x.row_index) {
+                if val.column_index == FilterComp::id() {
                     return false;
                 }
             }
