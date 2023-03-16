@@ -11,11 +11,11 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
     pub(crate) row_index: usize,
-    pub(crate) column_index: ComponentID,
+    pub(crate) column_index: CompType,
     pub(crate) access: *mut u8,
 }
 impl TableCellAccess {
-    pub(crate) fn new(entity_id: usize, ty: ComponentID, access: *mut u8) -> Self {
+    pub(crate) fn new(entity_id: usize, ty: CompType, access: *mut u8) -> Self {
         Self {
             row_index: entity_id,
             column_index: ty,
@@ -79,12 +79,12 @@ impl<'a> IntoIterator for &'a mut AccessVec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ComponentID {
+pub struct CompType {
     // for debugging
     pub(crate) name: &'static str,
     pub(crate) type_id: TypeId,
 }
-impl ComponentID {
+impl CompType {
     pub(crate) fn new<C: Component>() -> Self {
         Self {
             name: type_name::<C>(),
@@ -94,15 +94,15 @@ impl ComponentID {
 }
 
 pub trait Component: Clone + 'static {
-    fn id() -> ComponentID {
-        ComponentID {
+    fn id() -> CompType {
+        CompType {
             name: type_name::<Self>(),
             type_id: TypeId::of::<Self>(),
         }
     }
 
-    fn id_instance(&self) -> ComponentID {
-        ComponentID {
+    fn id_instance(&self) -> CompType {
+        CompType {
             name: type_name::<Self>(),
             type_id: TypeId::of::<Self>(),
         }
@@ -213,7 +213,7 @@ impl TypeErasedColumn {
 }
 
 pub struct ComponentTable {
-    data_hash: HashMap<ComponentID, TypeErasedColumn>,
+    data_hash: HashMap<CompType, TypeErasedColumn>,
     current_entity_id: usize,
 }
 
@@ -247,7 +247,7 @@ impl ComponentTable {
         let dst_ptr = self
             .ensure_access_of_type::<C>()
             .add((&mut component as *mut C).cast::<u8>(), new_entity_id - 1);
-        TableCellAccess::new(new_entity_id - 1, ComponentID::new::<C>(), dst_ptr)
+        TableCellAccess::new(new_entity_id - 1, CompType::new::<C>(), dst_ptr)
     }
 
     pub(crate) fn remove_as<C: Component>(
@@ -285,7 +285,7 @@ impl ComponentTable {
             for (index, ptr) in raw_vec {
                 result_access_vec
                     .0
-                    .push(TableCellAccess::new(index, ComponentID::new::<C>(), ptr));
+                    .push(TableCellAccess::new(index, CompType::new::<C>(), ptr));
             }
             result_access_vec
         } else {
