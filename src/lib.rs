@@ -238,33 +238,6 @@ pub struct ComponentTable {
     current_entity_id: usize,
 }
 
-impl Index<CompType> for ComponentTable {
-    type Output = Option<AccessColumn>;
-
-    // TODO make this binary search
-    fn index(&self, index: CompType) -> &Self::Output {
-        todo!()
-    }
-}
-impl IndexMut<CompType> for ComponentTable {
-    fn index_mut(&mut self, index: CompType) -> &mut Self::Output {
-        todo!()
-    }
-}
-
-impl Index<usize> for ComponentTable {
-    type Output = Option<AccessRow>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        todo!()
-    }
-}
-impl IndexMut<usize> for ComponentTable {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        todo!()
-    }
-}
-
 // TODO: completely remove the type generics of this data strcuture
 impl ComponentTable {
     pub(crate) fn new() -> Self {
@@ -274,6 +247,8 @@ impl ComponentTable {
             current_entity_id: 0,
         }
     }
+
+    pub(crate) fn init_new_column(&mut self) {}
 
     pub(crate) fn push_row(&mut self, slice: &[u8]) {
         todo!()
@@ -298,8 +273,6 @@ impl ComponentTable {
 
     // if range == full, mark that entity index as available
     pub(crate) fn remove_row_slice<C: Component>(&mut self) {}
-
-    pub(crate) fn init_new_column(&mut self) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
