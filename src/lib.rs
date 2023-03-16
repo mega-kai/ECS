@@ -1,13 +1,11 @@
 #![allow(dead_code, unused_variables, unused_imports, unused_mut)]
 #![feature(alloc_layout_extra, map_try_insert)]
-use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
     collections::HashMap,
     fmt::Debug,
-    mem::size_of,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -321,7 +319,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
-        let mut access_vec =
+        let access_vec =
             <F as Filter>::apply_on(self.storage.query_single_from_type::<C>(), self.storage);
         let mut result: Vec<&mut C> = vec![];
         for val in access_vec {
@@ -446,14 +444,14 @@ impl Ord for System {
 
 pub struct Scheduler {
     new_pool: Vec<System>,
-    waiting: Vec<System>,
+    // waiting: Vec<System>,
     pub(crate) queue: Vec<System>,
 }
 impl Scheduler {
     pub fn new() -> Self {
         Self {
             new_pool: vec![],
-            waiting: vec![],
+            // waiting: vec![],
             queue: vec![],
         }
     }
@@ -505,7 +503,6 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
-    use std::{alloc::Layout, marker::PhantomData};
 
     use super::*;
 
