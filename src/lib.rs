@@ -10,23 +10,17 @@ use std::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
-    pub(crate) row_index: usize,
-    pub(crate) column_index: CompType,
+    pub(crate) entity_index: usize,
+    pub(crate) column_type: CompType,
     pub(crate) access: *mut u8,
 }
 impl TableCellAccess {
     pub(crate) fn new(entity_id: usize, ty: CompType, access: *mut u8) -> Self {
         Self {
-            row_index: entity_id,
-            column_index: ty,
+            entity_index: entity_id,
+            column_type: ty,
             access,
         }
-    }
-
-    // not recommended
-    pub unsafe fn cast<C: Component>(&self) -> &mut C {
-        assert_eq!(C::id(), self.column_index);
-        self.access.cast::<C>().as_mut().unwrap()
     }
 }
 
@@ -34,18 +28,18 @@ impl TableCellAccess {
 pub struct AccessColumn(pub(crate) Vec<TableCellAccess>, pub(crate) CompType);
 impl AccessColumn {
     pub(crate) fn new<C: Component>(access_vec: Vec<TableCellAccess>) -> Self {
-        Self(access_vec, C::id())
+        Self(access_vec, C::comp_type())
     }
 
     pub(crate) fn new_empty<C: Component>() -> Self {
-        Self(vec![], C::id())
+        Self(vec![], C::comp_type())
     }
 
     pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
         // on the promise that all accesses of this vec share the same type
         // assert_eq!(C::id(), self.0[0].column_index);
         self.into_iter()
-            .map(|x| unsafe { x.cast::<C>() })
+            .map(|x| unsafe { x.access.cast::<C>().as_mut().unwrap() })
             .collect::<Vec<&mut C>>()
     }
 }
@@ -132,14 +126,7 @@ impl CompType {
 }
 
 pub trait Component: Clone + 'static {
-    fn id() -> CompType {
-        CompType {
-            name: type_name::<Self>(),
-            type_id: TypeId::of::<Self>(),
-        }
-    }
-
-    fn id_instance(&self) -> CompType {
+    fn comp_type() -> CompType {
         CompType {
             name: type_name::<Self>(),
             type_id: TypeId::of::<Self>(),
@@ -266,12 +253,12 @@ impl ComponentTable {
 
     fn ensure_access_of_type<C: Component>(&mut self) -> &mut TypeErasedColumn {
         self.data_hash
-            .entry(C::id())
+            .entry(C::comp_type())
             .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
     }
 
     fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedColumn, &'static str> {
-        if let Some(access) = self.data_hash.get_mut(&C::id()) {
+        if let Some(access) = self.data_hash.get_mut(&C::comp_type()) {
             Ok(access)
         } else {
             Err("no such component type exist in this table")
@@ -295,7 +282,7 @@ impl ComponentTable {
         unsafe {
             Ok(self
                 .try_access::<C>()?
-                .remove(key.row_index)
+                .remove(key.entity_index)
                 .unwrap()
                 .cast::<C>()
                 .as_mut()
@@ -317,7 +304,7 @@ impl ComponentTable {
     }
 
     pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
-        if let Some(access) = self.data_hash.get(&C::id()) {
+        if let Some(access) = self.data_hash.get(&C::comp_type()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec = AccessColumn::new_empty::<C>();
             for (index, ptr) in raw_vec {
@@ -360,8 +347,9 @@ impl<FilterComp: Component> With<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.query_row(x.row_index) {
-                if val.column_index == FilterComp::id() {
+            for val in table.query_row(x.entity_index) {
+                if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
+                {
                     return true;
                 }
             }
@@ -378,8 +366,9 @@ impl<FilterComp: Component> Without<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.query_row(x.row_index) {
-                if val.column_index == FilterComp::id() {
+            for val in table.query_row(x.entity_index) {
+                if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
+                {
                     return false;
                 }
             }
@@ -574,7 +563,7 @@ mod test {
     impl Component for Player {}
 
     fn spawn(mut command: Command) {
-        command.add_component(Player("uwu"));
+        command.add_component(Player("player name"));
         println!("uwu player spawned");
     }
 
