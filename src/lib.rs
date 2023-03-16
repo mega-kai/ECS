@@ -42,7 +42,6 @@ impl AccessVec {
     }
 
     pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
-        assert!(!self.0.is_empty());
         // on the promise that all accesses of this vec share the same type
         assert_eq!(C::id(), self.0[0].column_index);
         self.into_iter()
@@ -388,14 +387,8 @@ impl<'a> Command<'a> {
         self.table.remove_as::<C>(key).unwrap()
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
-        let access_vec =
-            <F as Filter>::apply_on(self.table.query_single_from_type::<C>(), self.table);
-        let mut result: Vec<&mut C> = vec![];
-        for val in access_vec {
-            result.push(unsafe { val.access.cast::<C>().as_mut().unwrap() });
-        }
-        result
+    pub fn query<C: Component, F: Filter>(&mut self) -> AccessVec {
+        <F as Filter>::apply_on(self.table.query_single_from_type::<C>(), self.table)
     }
 }
 
@@ -531,15 +524,18 @@ mod test {
         command.add_component(Player("uwu"));
         println!("uwu player spawned");
     }
+
     fn system(mut command: Command) {
-        for val in command.query::<Player, ()>() {
+        for val in command.query::<Player, ()>().cast_vec::<Player>() {
             println!("{}", val.0);
         }
         //
     }
+
     fn remove(mut command: Command) {
         for key in command.query::<Player, ()>() {
-            // command.remove_component(key);
+            command.remove_component::<Player>(key);
+            println!("component removed uwu")
         }
     }
 
@@ -552,6 +548,9 @@ mod test {
         app.tick();
 
         app.add_system(System::new(2, ExecutionFrequency::Once(false), remove));
+        app.tick();
+        app.tick();
+        app.tick();
         app.tick();
     }
 }
