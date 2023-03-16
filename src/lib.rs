@@ -134,11 +134,6 @@ pub trait Component: Clone + 'static {
     }
 }
 
-// impl<C0: Component> Component for (C0,) {}
-// impl<C0: Component, C1: Component> Component for (C0, C1) {}
-// impl<C0: Component, C1: Component, C2: Component> Component for (C0, C1, C2) {}
-// impl<C0: Component, C1: Component, C2: Component, C3: Component> Component for (C0, C1, C2, C3) {}
-
 pub(crate) struct TypeErasedColumn {
     layout_of_component: Layout,
     data_heap_ptr: *mut u8,
@@ -396,11 +391,6 @@ impl Filter for () {
         vec
     }
 }
-
-// impl<F0: Filter> Filter for (F0,) {}
-// impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
-// impl<F0: Filter, F1: Filter, F2: Filter> Filter for (F0, F1, F2) {}
-// impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
 
 pub struct Command<'a> {
     table: &'a mut ComponentTable,
