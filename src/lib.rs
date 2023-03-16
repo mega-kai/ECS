@@ -236,7 +236,7 @@ impl ComponentTable {
         if let Some(access) = self.data_hash.get_mut(&C::id()) {
             Ok(access)
         } else {
-            Err("no such component type exist in this storage")
+            Err("no such component type exist in this table")
         }
     }
 
@@ -317,9 +317,9 @@ pub enum ExecutionFrequency {
 pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(mut vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
+    pub(crate) fn apply_with_filter(mut vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
         vec.0.retain(|x| {
-            for val in storage.query_accesses_with_same_id(x.row_index) {
+            for val in table.query_accesses_with_same_id(x.row_index) {
                 if val.column_index == FilterComp::id() {
                     return true;
                 }
@@ -334,10 +334,10 @@ pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> Without<FilterComp> {
     pub(crate) fn apply_without_filter(
         mut vec: AccessVec,
-        storage: &mut ComponentTable,
+        table: &mut ComponentTable,
     ) -> AccessVec {
         vec.0.retain(|x| {
-            for val in storage.query_accesses_with_same_id(x.row_index) {
+            for val in table.query_accesses_with_same_id(x.row_index) {
                 if val.column_index == FilterComp::id() {
                     return false;
                 }
@@ -349,20 +349,20 @@ impl<FilterComp: Component> Without<FilterComp> {
 }
 
 pub trait Filter: Sized {
-    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec;
+    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec;
 }
 impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
-        With::<FilterComp>::apply_with_filter(vec, storage)
+    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+        With::<FilterComp>::apply_with_filter(vec, table)
     }
 }
 impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
-        Without::<FilterComp>::apply_without_filter(vec, storage)
+    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+        Without::<FilterComp>::apply_without_filter(vec, table)
     }
 }
 impl Filter for () {
-    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
+    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
         vec
     }
 }
@@ -373,24 +373,24 @@ impl Filter for () {
 // impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
 
 pub struct Command<'a> {
-    storage: &'a mut ComponentTable,
+    table: &'a mut ComponentTable,
 }
 impl<'a> Command<'a> {
-    pub(crate) fn new(storage: &'a mut ComponentTable) -> Self {
-        Self { storage }
+    pub(crate) fn new(table: &'a mut ComponentTable) -> Self {
+        Self { table }
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        self.storage.add_new_entity(component)
+        self.table.add_new_entity(component)
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
-        self.storage.remove_as::<C>(key).unwrap()
+        self.table.remove_as::<C>(key).unwrap()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
         let access_vec =
-            <F as Filter>::apply_on(self.storage.query_single_from_type::<C>(), self.storage);
+            <F as Filter>::apply_on(self.table.query_single_from_type::<C>(), self.table);
         let mut result: Vec<&mut C> = vec![];
         for val in access_vec {
             result.push(unsafe { val.access.cast::<C>().as_mut().unwrap() });
@@ -421,8 +421,8 @@ impl System {
         }
     }
 
-    pub(crate) fn run(&self, storage: &mut ComponentTable) {
-        (self.func)(Command::new(storage))
+    pub(crate) fn run(&self, table: &mut ComponentTable) {
+        (self.func)(Command::new(table))
     }
 
     fn is_once_run(&self) -> bool {
@@ -480,14 +480,14 @@ impl Scheduler {
 }
 
 pub struct ECS {
-    storage: ComponentTable,
+    table: ComponentTable,
     scheduler: Scheduler,
 }
 
 impl ECS {
     pub fn new() -> Self {
         Self {
-            storage: ComponentTable::new(),
+            table: ComponentTable::new(),
             scheduler: Scheduler::new(),
         }
     }
@@ -500,10 +500,10 @@ impl ECS {
         self.scheduler.prepare_queue();
         for system in &mut self.scheduler.queue {
             match system.frequency {
-                ExecutionFrequency::Always => system.run(&mut self.storage),
+                ExecutionFrequency::Always => system.run(&mut self.table),
                 ExecutionFrequency::Once(_) => {
                     system.frequency = ExecutionFrequency::Once(true);
-                    system.run(&mut self.storage);
+                    system.run(&mut self.table);
                 }
             }
         }
