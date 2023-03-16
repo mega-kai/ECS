@@ -11,6 +11,7 @@ use std::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
+    // pub(crate) assigned_index: usize,
     pub(crate) entity_index: usize,
     pub(crate) column_type: CompType,
     pub(crate) access: *mut u8,
@@ -238,6 +239,7 @@ pub struct ComponentTable {
     current_entity_id: usize,
 }
 
+// TODO: completely remove the type generics of this data strcuture
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
@@ -261,45 +263,22 @@ impl ComponentTable {
         }
     }
 
-    // deprecated
-    pub(crate) fn push_cell<C: Component>(&mut self, mut component: C) -> TableCellAccess {
-        self.current_entity_id += 1;
-        let new_entity_id = self.current_entity_id;
-        let dst_ptr = self
-            .ensure_access_of_type::<C>()
-            .add((&mut component as *mut C).cast::<u8>(), new_entity_id - 1);
-        TableCellAccess::new(new_entity_id - 1, CompType::new::<C>(), dst_ptr)
-    }
-
-    // deprecated
-    pub(crate) fn remove_cell<C: Component>(
-        &mut self,
-        key: TableCellAccess,
-    ) -> Result<C, &'static str> {
-        unsafe {
-            Ok(self
-                .try_access::<C>()?
-                .remove(key.entity_index)
-                .unwrap()
-                .cast::<C>()
-                .as_mut()
-                .cloned()
-                .unwrap())
-        }
-    }
-
-    pub(crate) fn push_row_slice<C: Component>(&mut self, slice: &[C]) {
+    pub(crate) fn push_row_slice(&mut self, slice: &[u8]) {
         todo!()
     }
 
-    pub(crate) fn insert_row_slice<C: Component>(&mut self, slice: &[C]) {
+    pub(crate) fn insert_row_slice_on_index(
+        &mut self,
+        dst_entity_index: usize,
+        slice: &[u8],
+    ) -> Result<&'static str, &'static str> {
         todo!()
     }
 
     pub(crate) fn move_row_slice<C: Component, R: RangeBounds<CompType>>(
         &self,
-        src_entity_id: usize,
-        dst_entity_id: usize,
+        src_entity_index: usize,
+        dst_entity_index: usize,
         range: R,
     ) {
         todo!()
@@ -308,7 +287,7 @@ impl ComponentTable {
     // if range == full, mark that entity index as available
     pub(crate) fn remove_row_slice<C: Component>(&mut self) {}
 
-    pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
+    pub(crate) fn get_column<C: Component>(&self) -> AccessColumn {
         if let Some(access) = self.hash_table.get(&C::comp_type()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec = AccessColumn::new_empty::<C>();
@@ -323,7 +302,7 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn query_row(&self, entity_id: usize) -> AccessRow {
+    pub(crate) fn get_row(&self, entity_id: usize) -> AccessRow {
         let mut vec = AccessRow::new_empty(entity_id);
         for (id, column) in self.hash_table.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
@@ -352,7 +331,7 @@ impl<FilterComp: Component> With<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.query_row(x.entity_index) {
+            for val in table.get_row(x.entity_index) {
                 if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
                 {
                     return true;
@@ -371,7 +350,7 @@ impl<FilterComp: Component> Without<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.query_row(x.entity_index) {
+            for val in table.get_row(x.entity_index) {
                 if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
                 {
                     return false;
@@ -419,7 +398,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        <F as Filter>::apply_on(self.table.query_column::<C>(), self.table)
+        <F as Filter>::apply_on(self.table.get_column::<C>(), self.table)
     }
 }
 
