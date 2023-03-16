@@ -24,7 +24,7 @@ impl TableCellAccess {
     }
 
     // not recommended
-    pub unsafe fn cast<C: Component>(&self) -> &mut C {
+    pub unsafe fn cast<C: Cell>(&self) -> &mut C {
         assert_eq!(C::id(), self.column_index);
         self.access.cast::<C>().as_mut().unwrap()
     }
@@ -41,7 +41,7 @@ impl AccessVec {
         Self(vec![])
     }
 
-    pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
+    pub fn cast_vec<C: Cell>(&self) -> Vec<&mut C> {
         assert!(!self.0.is_empty());
         // on the promise that all accesses of this vec share the same type
         assert_eq!(C::id(), self.0[0].column_index);
@@ -85,7 +85,7 @@ pub struct CompType {
     pub(crate) type_id: TypeId,
 }
 impl CompType {
-    pub(crate) fn new<C: Component>() -> Self {
+    pub(crate) fn new<C: Cell>() -> Self {
         Self {
             name: type_name::<C>(),
             type_id: TypeId::of::<C>(),
@@ -93,7 +93,7 @@ impl CompType {
     }
 }
 
-pub trait Component: Clone + 'static {
+pub trait Cell: Clone + 'static {
     fn id() -> CompType {
         CompType {
             name: type_name::<Self>(),
@@ -212,12 +212,12 @@ impl TypeErasedColumn {
     }
 }
 
-pub struct ComponentTable {
+pub struct Table {
     data_hash: HashMap<CompType, TypeErasedColumn>,
     current_entity_id: usize,
 }
 
-impl ComponentTable {
+impl Table {
     pub(crate) fn new() -> Self {
         Self {
             data_hash: HashMap::new(),
@@ -226,13 +226,13 @@ impl ComponentTable {
         }
     }
 
-    fn ensure_access_of_type<C: Component>(&mut self) -> &mut TypeErasedColumn {
+    fn ensure_access_of_type<C: Cell>(&mut self) -> &mut TypeErasedColumn {
         self.data_hash
             .entry(C::id())
             .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
     }
 
-    fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedColumn, &'static str> {
+    fn try_access<C: Cell>(&mut self) -> Result<&mut TypeErasedColumn, &'static str> {
         if let Some(access) = self.data_hash.get_mut(&C::id()) {
             Ok(access)
         } else {
@@ -241,7 +241,7 @@ impl ComponentTable {
     }
 
     // should be insert multiple with [C]
-    pub(crate) fn add_new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+    pub(crate) fn add_new_entity<C: Cell>(&mut self, mut component: C) -> TableCellAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
         let dst_ptr = self
@@ -250,10 +250,7 @@ impl ComponentTable {
         TableCellAccess::new(new_entity_id - 1, CompType::new::<C>(), dst_ptr)
     }
 
-    pub(crate) fn remove_as<C: Component>(
-        &mut self,
-        key: TableCellAccess,
-    ) -> Result<C, &'static str> {
+    pub(crate) fn remove_as<C: Cell>(&mut self, key: TableCellAccess) -> Result<C, &'static str> {
         unsafe {
             Ok(self
                 .try_access::<C>()?
@@ -266,7 +263,7 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn add_n_link<C: Component>(
+    pub(crate) fn add_n_link<C: Cell>(
         &mut self,
         entity_id: usize,
         comp: C,
@@ -278,7 +275,7 @@ impl ComponentTable {
         todo!()
     }
 
-    pub(crate) fn query_single_from_type<C: Component>(&self) -> AccessVec {
+    pub(crate) fn query_single_from_type<C: Cell>(&self) -> AccessVec {
         if let Some(access) = self.data_hash.get(&C::id()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec = AccessVec::new_empty();
@@ -314,10 +311,10 @@ pub enum ExecutionFrequency {
     // Timed(f64, f64),
 }
 
-pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
-impl<FilterComp: Component> With<FilterComp> {
+pub struct With<FilterComp: Cell>(pub(crate) PhantomData<FilterComp>);
+impl<FilterComp: Cell> With<FilterComp> {
     // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(mut vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+    pub(crate) fn apply_with_filter(mut vec: AccessVec, table: &mut Table) -> AccessVec {
         vec.0.retain(|x| {
             for val in table.query_accesses_with_same_id(x.row_index) {
                 if val.column_index == FilterComp::id() {
@@ -330,12 +327,9 @@ impl<FilterComp: Component> With<FilterComp> {
     }
 }
 
-pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
-impl<FilterComp: Component> Without<FilterComp> {
-    pub(crate) fn apply_without_filter(
-        mut vec: AccessVec,
-        table: &mut ComponentTable,
-    ) -> AccessVec {
+pub struct Without<FilterComp: Cell>(pub(crate) PhantomData<FilterComp>);
+impl<FilterComp: Cell> Without<FilterComp> {
+    pub(crate) fn apply_without_filter(mut vec: AccessVec, table: &mut Table) -> AccessVec {
         vec.0.retain(|x| {
             for val in table.query_accesses_with_same_id(x.row_index) {
                 if val.column_index == FilterComp::id() {
@@ -349,20 +343,20 @@ impl<FilterComp: Component> Without<FilterComp> {
 }
 
 pub trait Filter: Sized {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec;
+    fn apply_on(vec: AccessVec, table: &mut Table) -> AccessVec;
 }
-impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+impl<FilterComp: Cell> Filter for With<FilterComp> {
+    fn apply_on(vec: AccessVec, table: &mut Table) -> AccessVec {
         With::<FilterComp>::apply_with_filter(vec, table)
     }
 }
-impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+impl<FilterComp: Cell> Filter for Without<FilterComp> {
+    fn apply_on(vec: AccessVec, table: &mut Table) -> AccessVec {
         Without::<FilterComp>::apply_without_filter(vec, table)
     }
 }
 impl Filter for () {
-    fn apply_on(vec: AccessVec, table: &mut ComponentTable) -> AccessVec {
+    fn apply_on(vec: AccessVec, table: &mut Table) -> AccessVec {
         vec
     }
 }
@@ -373,22 +367,22 @@ impl Filter for () {
 // impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
 
 pub struct Command<'a> {
-    table: &'a mut ComponentTable,
+    table: &'a mut Table,
 }
 impl<'a> Command<'a> {
-    pub(crate) fn new(table: &'a mut ComponentTable) -> Self {
+    pub(crate) fn new(table: &'a mut Table) -> Self {
         Self { table }
     }
 
-    pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
+    pub fn add_component<C: Cell>(&mut self, component: C) -> TableCellAccess {
         self.table.add_new_entity(component)
     }
 
-    pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
+    pub fn remove_component<C: Cell>(&mut self, key: TableCellAccess) -> C {
         self.table.remove_as::<C>(key).unwrap()
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
+    pub fn query<C: Cell, F: Filter>(&mut self) -> Vec<&mut C> {
         let access_vec =
             <F as Filter>::apply_on(self.table.query_single_from_type::<C>(), self.table);
         let mut result: Vec<&mut C> = vec![];
@@ -421,7 +415,7 @@ impl System {
         }
     }
 
-    pub(crate) fn run(&self, table: &mut ComponentTable) {
+    pub(crate) fn run(&self, table: &mut Table) {
         (self.func)(Command::new(table))
     }
 
@@ -480,14 +474,14 @@ impl Scheduler {
 }
 
 pub struct ECS {
-    table: ComponentTable,
+    table: Table,
     scheduler: Scheduler,
 }
 
 impl ECS {
     pub fn new() -> Self {
         Self {
-            table: ComponentTable::new(),
+            table: Table::new(),
             scheduler: Scheduler::new(),
         }
     }
@@ -517,15 +511,15 @@ mod test {
 
     #[derive(Clone)]
     struct Health(i32);
-    impl Component for Health {}
+    impl Cell for Health {}
 
     #[derive(Clone, Debug)]
     struct Mana(i32);
-    impl Component for Mana {}
+    impl Cell for Mana {}
 
     #[derive(Clone, Debug)]
     struct Player(&'static str);
-    impl Component for Player {}
+    impl Cell for Player {}
 
     fn spawn(mut command: Command) {
         command.add_component(Player("uwu"));
