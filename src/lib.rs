@@ -247,22 +247,15 @@ impl ComponentTable {
         }
     }
 
-    //-----------------ROW & COLUMN MANIPULATION-----------------//
+    //-----------------COLUMN MANIPULATION-----------------//
     pub(crate) fn init_column(&mut self, comp_type: CompType) {
         self.table
             .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
     }
 
-    // index assigned by the table
-    pub(crate) fn init_row(&mut self) {
-        todo!()
+    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
+        self.table.remove(&comp_type)
     }
-
-    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> TypeErasedColumn {
-        todo!()
-    }
-
-    pub(crate) fn pop_row(&mut self, entity_index: usize) {}
 
     //-----------------QUERY OPERATION-----------------//
     pub(crate) fn get_column(&mut self, comp_type: CompType) -> Option<AccessColumn> {
