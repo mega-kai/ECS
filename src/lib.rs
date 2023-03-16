@@ -308,7 +308,7 @@ impl ComponentTable {
     // if range == full, mark that entity index as available
     pub(crate) fn remove_row_slice<C: Component>(&mut self) {}
 
-    pub(crate) fn query_column_slice<C: Component>(&self) -> AccessColumn {
+    pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
         if let Some(access) = self.hash_table.get(&C::comp_type()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec = AccessColumn::new_empty::<C>();
@@ -419,7 +419,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        <F as Filter>::apply_on(self.table.query_column_slice::<C>(), self.table)
+        <F as Filter>::apply_on(self.table.query_column::<C>(), self.table)
     }
 }
 
