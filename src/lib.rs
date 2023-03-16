@@ -266,7 +266,7 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn add_link<C: Component>(
+    pub(crate) fn add_n_link<C: Component>(
         &mut self,
         entity_id: usize,
         comp: C,
@@ -312,33 +312,6 @@ pub enum ExecutionFrequency {
     Always,
     Once(bool),
     // Timed(f64, f64),
-}
-
-pub struct Command<'a> {
-    storage: &'a mut ComponentTable,
-}
-impl<'a> Command<'a> {
-    pub(crate) fn new(storage: &'a mut ComponentTable) -> Self {
-        Self { storage }
-    }
-
-    pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        self.storage.add_new_entity(component)
-    }
-
-    pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
-        self.storage.remove_as::<C>(key).unwrap()
-    }
-
-    pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
-        let access_vec =
-            <F as Filter>::apply_on(self.storage.query_single_from_type::<C>(), self.storage);
-        let mut result: Vec<&mut C> = vec![];
-        for val in access_vec {
-            result.push(unsafe { val.access.cast::<C>().as_mut().unwrap() });
-        }
-        result
-    }
 }
 
 pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
@@ -398,6 +371,33 @@ impl Filter for () {
 // impl<F0: Filter, F1: Filter> Filter for (F0, F1) {}
 // impl<F0: Filter, F1: Filter, F2: Filter> Filter for (F0, F1, F2) {}
 // impl<F0: Filter, F1: Filter, F2: Filter, F3: Filter> Filter for (F0, F1, F2, F3) {}
+
+pub struct Command<'a> {
+    storage: &'a mut ComponentTable,
+}
+impl<'a> Command<'a> {
+    pub(crate) fn new(storage: &'a mut ComponentTable) -> Self {
+        Self { storage }
+    }
+
+    pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
+        self.storage.add_new_entity(component)
+    }
+
+    pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
+        self.storage.remove_as::<C>(key).unwrap()
+    }
+
+    pub fn query<C: Component, F: Filter>(&mut self) -> Vec<&mut C> {
+        let access_vec =
+            <F as Filter>::apply_on(self.storage.query_single_from_type::<C>(), self.storage);
+        let mut result: Vec<&mut C> = vec![];
+        for val in access_vec {
+            result.push(unsafe { val.access.cast::<C>().as_mut().unwrap() });
+        }
+        result
+    }
+}
 
 pub struct System {
     pub(crate) order: usize,
