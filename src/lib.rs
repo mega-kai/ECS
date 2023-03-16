@@ -34,7 +34,7 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
-    use std::alloc::Layout;
+    use std::{alloc::Layout, marker::PhantomData};
 
     use super::*;
 

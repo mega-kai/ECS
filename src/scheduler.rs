@@ -37,10 +37,10 @@ impl<'a> Command<'a> {
     }
 }
 
-pub struct With<C: Component>(PhantomData<C>);
+pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
-    fn apply_with_filter(
+    pub(crate) fn apply_with_filter(
         mut vec: Vec<ComponentAccess>,
         storage: &mut ComponentTable,
     ) -> Vec<ComponentAccess> {
@@ -56,9 +56,9 @@ impl<FilterComp: Component> With<FilterComp> {
     }
 }
 
-pub struct Without<C: Component>(PhantomData<C>);
+pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> Without<FilterComp> {
-    fn apply_without_filter(
+    pub(crate) fn apply_without_filter(
         mut vec: Vec<ComponentAccess>,
         storage: &mut ComponentTable,
     ) -> Vec<ComponentAccess> {
