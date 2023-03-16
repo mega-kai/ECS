@@ -44,9 +44,15 @@ impl<FilterComp: Component> With<FilterComp> {
         mut vec: Vec<ComponentAccess>,
         storage: &mut ComponentTable,
     ) -> Vec<ComponentAccess> {
-        vec.retain(|x| storage.query_accesses_with_same_id(x.entity_id).contains(x));
-        // vec
-        todo!()
+        vec.retain(|x| {
+            for val in storage.query_accesses_with_same_id(x.entity_id) {
+                if val.id == FilterComp::id() {
+                    return true;
+                }
+            }
+            return false;
+        });
+        vec
     }
 }
 
@@ -56,7 +62,14 @@ impl<FilterComp: Component> Without<FilterComp> {
         mut vec: Vec<ComponentAccess>,
         storage: &mut ComponentTable,
     ) -> Vec<ComponentAccess> {
-        vec.retain(|x| true);
+        vec.retain(|x| {
+            for val in storage.query_accesses_with_same_id(x.entity_id) {
+                if val.id == FilterComp::id() {
+                    return false;
+                }
+            }
+            return true;
+        });
         vec
     }
 }
