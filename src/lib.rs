@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables, unused_imports, unused_mut)]
-#![feature(alloc_layout_extra, map_try_insert)]
+#![feature(alloc_layout_extra)]
 use std::marker::PhantomData;
 use std::{
     alloc::Layout,
