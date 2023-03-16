@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_variables, unused_imports, unused_mut)]
 #![feature(alloc_layout_extra)]
 use std::marker::PhantomData;
+use std::ops::{Range, RangeBounds};
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -260,6 +261,7 @@ impl ComponentTable {
         }
     }
 
+    // deprecated
     pub(crate) fn push_cell<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
@@ -269,11 +271,7 @@ impl ComponentTable {
         TableCellAccess::new(new_entity_id - 1, CompType::new::<C>(), dst_ptr)
     }
 
-    pub(crate) fn insert_cell<C: Component>() {}
-
-    // on column
-    pub(crate) fn move_cell<C: Component>() {}
-
+    // deprecated
     pub(crate) fn remove_cell<C: Component>(
         &mut self,
         key: TableCellAccess,
@@ -290,16 +288,27 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn push_row_slice() {}
-
-    pub(crate) fn insert_row_slice() {}
-
-    pub(crate) fn move_row_slice(&self, entity_id: usize) {
+    pub(crate) fn push_row_slice<C: Component>(&mut self, slice: &[C]) {
         todo!()
     }
-    pub(crate) fn remove_row_slice() {}
 
-    pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
+    pub(crate) fn insert_row_slice<C: Component>(&mut self, slice: &[C]) {
+        todo!()
+    }
+
+    pub(crate) fn move_row_slice<C: Component, R: RangeBounds<CompType>>(
+        &self,
+        src_entity_id: usize,
+        dst_entity_id: usize,
+        range: R,
+    ) {
+        todo!()
+    }
+
+    // if range == full, mark that entity index as available
+    pub(crate) fn remove_row_slice<C: Component>(&mut self) {}
+
+    pub(crate) fn query_column_slice<C: Component>(&self) -> AccessColumn {
         if let Some(access) = self.hash_table.get(&C::comp_type()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec = AccessColumn::new_empty::<C>();
@@ -410,7 +419,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        <F as Filter>::apply_on(self.table.query_column::<C>(), self.table)
+        <F as Filter>::apply_on(self.table.query_column_slice::<C>(), self.table)
     }
 }
 
