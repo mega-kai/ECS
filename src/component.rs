@@ -56,14 +56,6 @@ pub trait Component: Clone + 'static {
             type_id: TypeId::of::<Self>(),
         }
     }
-
-    // fn layout() -> Layout {
-    //     Layout::new::<Self>()
-    // }
-
-    // fn size() -> usize {
-    //     size_of::<Self>()
-    // }
 }
 
 impl<C0: Component> Component for (C0,) {}
