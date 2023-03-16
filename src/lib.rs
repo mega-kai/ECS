@@ -143,7 +143,7 @@ pub(crate) struct TypeErasedColumn {
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
-    pub(crate) fn query_all_dense_ptr_with_sparse_entity_id(&self) -> Vec<(usize, *mut u8)> {
+    pub(crate) fn query_all_access(&self) -> Vec<(usize, *mut u8)> {
         let mut result_vec: Vec<(usize, *mut u8)> = vec![];
         for val in self.sparse.iter() {
             if let Some(current_id) = val {
@@ -234,7 +234,7 @@ impl TypeErasedColumn {
 
 pub struct ComponentTable {
     // TODO: make this vec indexable with comptype
-    table: Vec<TypeErasedColumn>,
+    table: HashMap<CompType, TypeErasedColumn>,
     current_entity_id: usize,
 }
 
@@ -242,37 +242,65 @@ pub struct ComponentTable {
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
-            table: vec![],
-            // 0 would be reserved
+            table: HashMap::new(),
             current_entity_id: 0,
         }
     }
 
-    pub(crate) fn init_new_column(&mut self) {}
+    //-----------------ROW & COLUMN MANIPULATION-----------------//
+    pub(crate) fn init_column(&mut self, comp_type: CompType) {
+        self.table
+            .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
+    }
 
-    pub(crate) fn push_row(&mut self, slice: &[u8]) {
+    // index assigned by the table
+    pub(crate) fn init_row(&mut self) {
         todo!()
     }
 
-    pub(crate) fn try_insert_row_slice_on_index(
+    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> TypeErasedColumn {
+        todo!()
+    }
+
+    pub(crate) fn pop_row(&mut self, entity_index: usize) {}
+
+    //-----------------QUERY OPERATION-----------------//
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Option<AccessColumn> {
+        todo!()
+    }
+
+    pub(crate) fn get_row(&mut self, entity_index: usize) -> Option<AccessRow> {
+        todo!()
+    }
+
+    //-----------------CELL MANIPULATION-----------------//
+    pub(crate) fn push_cell(
         &mut self,
         dst_entity_index: usize,
-        slice: &[u8],
-    ) -> Result<&'static str, &'static str> {
+        comp_type: CompType,
+        // ptr to the component
+        ptr: *mut u8,
+    ) -> Result<*mut u8, &'static str> {
         todo!()
     }
 
-    pub(crate) fn move_row_slice<C: Component, R: RangeBounds<CompType>>(
-        &self,
-        src_entity_index: usize,
+    pub(crate) fn pop_cell(
+        &mut self,
         dst_entity_index: usize,
-        range: R,
-    ) {
+        comp_type: CompType,
+        ptr: *mut u8,
+    ) -> Result<*mut u8, &'static str> {
         todo!()
     }
 
-    // if range == full, mark that entity index as available
-    pub(crate) fn remove_row_slice<C: Component>(&mut self) {}
+    pub(crate) fn swap_cell(
+        &mut self,
+        comp_type: CompType,
+        cell1_entity_index: usize,
+        cell2_entity_index: usize,
+    ) -> Result<(), &'static str> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
