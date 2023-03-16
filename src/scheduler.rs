@@ -89,7 +89,7 @@ impl<FilterComp: Component> Filter for Without<FilterComp> {
 }
 impl Filter for () {
     fn apply_on(vec: Vec<ComponentAccess>, storage: &mut ComponentTable) -> Vec<ComponentAccess> {
-        todo!()
+        vec
     }
 }
 
