@@ -30,6 +30,48 @@ impl ComponentAccess {
     }
 }
 
+pub struct AccessVec(pub(crate) Vec<ComponentAccess>);
+impl AccessVec {
+    pub(crate) fn new(access_vec: Vec<ComponentAccess>) -> Self {
+        Self(access_vec)
+    }
+
+    pub(crate) fn new_empty() -> Self {
+        Self(vec![])
+    }
+
+    pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
+        todo!()
+    }
+}
+impl IntoIterator for AccessVec {
+    type Item = ComponentAccess;
+
+    type IntoIter = std::vec::IntoIter<ComponentAccess>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a AccessVec {
+    type Item = &'a ComponentAccess;
+
+    type IntoIter = std::slice::Iter<'a, ComponentAccess>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl<'a> IntoIterator for &'a mut AccessVec {
+    type Item = &'a mut ComponentAccess;
+
+    type IntoIter = std::slice::IterMut<'a, ComponentAccess>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentID {
     // for debugging
@@ -230,12 +272,14 @@ impl ComponentTable {
         todo!()
     }
 
-    pub(crate) fn query_single_from_type<C: Component>(&self) -> Vec<ComponentAccess> {
+    pub(crate) fn query_single_from_type<C: Component>(&self) -> AccessVec {
         if let Some(access) = self.data_hash.get(&C::id()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
-            let mut result_access_vec: Vec<ComponentAccess> = vec![];
+            let mut result_access_vec = AccessVec::new_empty();
             for (index, ptr) in raw_vec {
-                result_access_vec.push(ComponentAccess::new(index, ComponentID::new::<C>(), ptr));
+                result_access_vec
+                    .0
+                    .push(ComponentAccess::new(index, ComponentID::new::<C>(), ptr));
             }
             result_access_vec
         } else {
@@ -243,11 +287,11 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn query_accesses_with_same_id(&self, entity_id: usize) -> Vec<ComponentAccess> {
-        let mut vec: Vec<ComponentAccess> = vec![];
+    pub(crate) fn query_accesses_with_same_id(&self, entity_id: usize) -> AccessVec {
+        let mut vec = AccessVec::new_empty();
         for (id, column) in self.data_hash.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
-                vec.push(ComponentAccess::new(entity_id, *id, ptr));
+                vec.0.push(ComponentAccess::new(entity_id, *id, ptr));
             } else {
                 continue;
             }
@@ -262,44 +306,6 @@ pub enum ExecutionFrequency {
     Always,
     Once(bool),
     // Timed(f64, f64),
-}
-
-pub struct AccessVec(pub(crate) Vec<ComponentAccess>);
-impl AccessVec {
-    pub(crate) fn new(access_vec: Vec<ComponentAccess>) -> Self {
-        Self(access_vec)
-    }
-
-    pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
-        todo!()
-    }
-}
-impl IntoIterator for AccessVec {
-    type Item = ComponentAccess;
-
-    type IntoIter = std::vec::IntoIter<ComponentAccess>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-impl<'a> IntoIterator for &'a AccessVec {
-    type Item = &'a ComponentAccess;
-
-    type IntoIter = std::slice::Iter<'a, ComponentAccess>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
-impl<'a> IntoIterator for &'a mut AccessVec {
-    type Item = &'a mut ComponentAccess;
-
-    type IntoIter = std::slice::IterMut<'a, ComponentAccess>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
-    }
 }
 
 pub struct Command<'a> {
@@ -332,11 +338,8 @@ impl<'a> Command<'a> {
 pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(
-        mut vec: Vec<ComponentAccess>,
-        storage: &mut ComponentTable,
-    ) -> Vec<ComponentAccess> {
-        vec.retain(|x| {
+    pub(crate) fn apply_with_filter(mut vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
+        vec.0.retain(|x| {
             for val in storage.query_accesses_with_same_id(x.entity_id) {
                 if val.id == FilterComp::id() {
                     return true;
@@ -351,10 +354,10 @@ impl<FilterComp: Component> With<FilterComp> {
 pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> Without<FilterComp> {
     pub(crate) fn apply_without_filter(
-        mut vec: Vec<ComponentAccess>,
+        mut vec: AccessVec,
         storage: &mut ComponentTable,
-    ) -> Vec<ComponentAccess> {
-        vec.retain(|x| {
+    ) -> AccessVec {
+        vec.0.retain(|x| {
             for val in storage.query_accesses_with_same_id(x.entity_id) {
                 if val.id == FilterComp::id() {
                     return false;
@@ -367,20 +370,20 @@ impl<FilterComp: Component> Without<FilterComp> {
 }
 
 pub trait Filter: Sized {
-    fn apply_on(vec: Vec<ComponentAccess>, storage: &mut ComponentTable) -> Vec<ComponentAccess>;
+    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec;
 }
 impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: Vec<ComponentAccess>, storage: &mut ComponentTable) -> Vec<ComponentAccess> {
+    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
         With::<FilterComp>::apply_with_filter(vec, storage)
     }
 }
 impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: Vec<ComponentAccess>, storage: &mut ComponentTable) -> Vec<ComponentAccess> {
+    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
         Without::<FilterComp>::apply_without_filter(vec, storage)
     }
 }
 impl Filter for () {
-    fn apply_on(vec: Vec<ComponentAccess>, storage: &mut ComponentTable) -> Vec<ComponentAccess> {
+    fn apply_on(vec: AccessVec, storage: &mut ComponentTable) -> AccessVec {
         vec
     }
 }
