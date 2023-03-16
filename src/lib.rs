@@ -260,7 +260,7 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn add_cell<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+    pub(crate) fn push_cell<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
         let dst_ptr = self
@@ -269,7 +269,10 @@ impl ComponentTable {
         TableCellAccess::new(new_entity_id - 1, CompType::new::<C>(), dst_ptr)
     }
 
-    pub(crate) fn move_cell() {}
+    pub(crate) fn insert_cell<C: Component>() {}
+
+    // on column
+    pub(crate) fn move_cell<C: Component>() {}
 
     pub(crate) fn remove_cell<C: Component>(
         &mut self,
@@ -287,11 +290,14 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn add_row() {}
+    pub(crate) fn push_row_slice() {}
 
-    pub(crate) fn move_row(&self, entity_id: usize) {
+    pub(crate) fn insert_row_slice() {}
+
+    pub(crate) fn move_row_slice(&self, entity_id: usize) {
         todo!()
     }
+    pub(crate) fn remove_row_slice() {}
 
     pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
         if let Some(access) = self.hash_table.get(&C::comp_type()) {
@@ -396,7 +402,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        self.table.add_cell(component)
+        self.table.push_cell(component)
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
