@@ -233,35 +233,34 @@ impl TypeErasedColumn {
 }
 
 pub struct ComponentTable {
-    data_hash: HashMap<CompType, TypeErasedColumn>,
+    hash_table: HashMap<CompType, TypeErasedColumn>,
     current_entity_id: usize,
 }
 
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
-            data_hash: HashMap::new(),
+            hash_table: HashMap::new(),
             // 0 would be reserved
             current_entity_id: 0,
         }
     }
 
     fn ensure_access_of_type<C: Component>(&mut self) -> &mut TypeErasedColumn {
-        self.data_hash
+        self.hash_table
             .entry(C::comp_type())
             .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
     }
 
     fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedColumn, &'static str> {
-        if let Some(access) = self.data_hash.get_mut(&C::comp_type()) {
+        if let Some(access) = self.hash_table.get_mut(&C::comp_type()) {
             Ok(access)
         } else {
             Err("no such component type exist in this table")
         }
     }
 
-    // should be insert multiple with [C]
-    pub(crate) fn add_new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+    pub(crate) fn add_cell<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         self.current_entity_id += 1;
         let new_entity_id = self.current_entity_id;
         let dst_ptr = self
@@ -270,7 +269,9 @@ impl ComponentTable {
         TableCellAccess::new(new_entity_id - 1, CompType::new::<C>(), dst_ptr)
     }
 
-    pub(crate) fn remove_as<C: Component>(
+    pub(crate) fn move_cell() {}
+
+    pub(crate) fn remove_cell<C: Component>(
         &mut self,
         key: TableCellAccess,
     ) -> Result<C, &'static str> {
@@ -286,20 +287,14 @@ impl ComponentTable {
         }
     }
 
-    pub(crate) fn add_n_link<C: Component>(
-        &mut self,
-        entity_id: usize,
-        comp: C,
-    ) -> Result<TableCellAccess, &'static str> {
-        todo!()
-    }
+    pub(crate) fn add_row() {}
 
-    pub(crate) fn link_multiple(&self, entity_id: usize) {
+    pub(crate) fn move_row(&self, entity_id: usize) {
         todo!()
     }
 
     pub(crate) fn query_column<C: Component>(&self) -> AccessColumn {
-        if let Some(access) = self.data_hash.get(&C::comp_type()) {
+        if let Some(access) = self.hash_table.get(&C::comp_type()) {
             let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
             let mut result_access_vec = AccessColumn::new_empty::<C>();
             for (index, ptr) in raw_vec {
@@ -315,7 +310,7 @@ impl ComponentTable {
 
     pub(crate) fn query_row(&self, entity_id: usize) -> AccessRow {
         let mut vec = AccessRow::new_empty(entity_id);
-        for (id, column) in self.data_hash.iter() {
+        for (id, column) in self.hash_table.iter() {
             if let Some(ptr) = unsafe { column.get(entity_id) } {
                 vec.0.push(TableCellAccess::new(entity_id, *id, ptr));
             } else {
@@ -401,11 +396,11 @@ impl<'a> Command<'a> {
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        self.table.add_new_entity(component)
+        self.table.add_cell(component)
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
-        self.table.remove_as::<C>(key).unwrap()
+        self.table.remove_cell::<C>(key).unwrap()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
