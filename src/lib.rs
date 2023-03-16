@@ -1,7 +1,8 @@
 #![allow(dead_code, unused_variables, unused_imports, unused_mut)]
 #![feature(alloc_layout_extra)]
 use std::marker::PhantomData;
-use std::ops::{Range, RangeBounds};
+use std::ops::{Index, IndexMut, Range, RangeBounds};
+use std::slice::SliceIndex;
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -27,14 +28,11 @@ impl TableCellAccess {
 }
 
 // all with the same component type
+#[derive(Clone)]
 pub struct AccessColumn(pub(crate) Vec<TableCellAccess>, pub(crate) CompType);
 impl AccessColumn {
-    pub(crate) fn new<C: Component>(access_vec: Vec<TableCellAccess>) -> Self {
-        Self(access_vec, C::comp_type())
-    }
-
-    pub(crate) fn new_empty<C: Component>() -> Self {
-        Self(vec![], C::comp_type())
+    pub(crate) fn new_empty(comp_type: CompType) -> Self {
+        Self(vec![], comp_type)
     }
 
     pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
@@ -74,6 +72,7 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 }
 
 // all with the same id and and must have diff types
+#[derive(Clone)]
 pub struct AccessRow(pub(crate) Vec<TableCellAccess>, pub(crate) usize);
 impl AccessRow {
     pub(crate) fn new(access_vec: Vec<TableCellAccess>, entity_id: usize) -> Self {
@@ -234,35 +233,49 @@ impl TypeErasedColumn {
 }
 
 pub struct ComponentTable {
-    hash_table: HashMap<CompType, TypeErasedColumn>,
+    // TODO: make this vec indexable with comptype
+    table: Vec<TypeErasedColumn>,
     current_entity_id: usize,
+}
+
+impl Index<CompType> for ComponentTable {
+    type Output = Option<AccessColumn>;
+
+    // TODO make this binary search
+    fn index(&self, index: CompType) -> &Self::Output {
+        todo!()
+    }
+}
+impl IndexMut<CompType> for ComponentTable {
+    fn index_mut(&mut self, index: CompType) -> &mut Self::Output {
+        todo!()
+    }
+}
+
+impl Index<usize> for ComponentTable {
+    type Output = Option<AccessRow>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        todo!()
+    }
+}
+impl IndexMut<usize> for ComponentTable {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        todo!()
+    }
 }
 
 // TODO: completely remove the type generics of this data strcuture
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
-            hash_table: HashMap::new(),
+            table: vec![],
             // 0 would be reserved
             current_entity_id: 0,
         }
     }
 
-    fn ensure_access_of_type(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
-        self.hash_table
-            .entry(C::comp_type())
-            .or_insert(TypeErasedColumn::new(Layout::new::<C>(), 64))
-    }
-
-    fn try_access<C: Component>(&mut self) -> Result<&mut TypeErasedColumn, &'static str> {
-        if let Some(access) = self.hash_table.get_mut(&C::comp_type()) {
-            Ok(access)
-        } else {
-            Err("no such component type exist in this table")
-        }
-    }
-
-    pub(crate) fn push_row_slice(&mut self, slice: &[u8]) {
+    pub(crate) fn push_row(&mut self, slice: &[u8]) {
         todo!()
     }
 
@@ -286,32 +299,7 @@ impl ComponentTable {
     // if range == full, mark that entity index as available
     pub(crate) fn remove_row_slice<C: Component>(&mut self) {}
 
-    pub(crate) fn get_column<C: Component>(&self) -> AccessColumn {
-        if let Some(access) = self.hash_table.get(&C::comp_type()) {
-            let mut raw_vec = access.query_all_dense_ptr_with_sparse_entity_id();
-            let mut result_access_vec = AccessColumn::new_empty::<C>();
-            for (index, ptr) in raw_vec {
-                result_access_vec
-                    .0
-                    .push(TableCellAccess::new(index, CompType::new::<C>(), ptr));
-            }
-            result_access_vec
-        } else {
-            panic!("no such component type within the table")
-        }
-    }
-
-    pub(crate) fn get_row(&self, entity_id: usize) -> AccessRow {
-        let mut vec = AccessRow::new_empty(entity_id);
-        for (id, column) in self.hash_table.iter() {
-            if let Some(ptr) = unsafe { column.get(entity_id) } {
-                vec.0.push(TableCellAccess::new(entity_id, *id, ptr));
-            } else {
-                continue;
-            }
-        }
-        vec
-    }
+    pub(crate) fn init_new_column(&mut self) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -330,7 +318,7 @@ impl<FilterComp: Component> With<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.get_row(x.entity_index) {
+            for val in table[x.entity_index].clone().unwrap() {
                 if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
                 {
                     return true;
@@ -349,7 +337,7 @@ impl<FilterComp: Component> Without<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.get_row(x.entity_index) {
+            for val in table[x.entity_index].clone().unwrap() {
                 if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
                 {
                     return false;
@@ -389,15 +377,17 @@ impl<'a> Command<'a> {
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        self.table.push_cell(component)
+        // self.table.push_cell(component)
+        todo!()
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
-        self.table.remove_cell::<C>(key).unwrap()
+        // self.table.remove_cell::<C>(key).unwrap()
+        todo!()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        <F as Filter>::apply_on(self.table.get_column::<C>(), self.table)
+        <F as Filter>::apply_on(self.table[C::comp_type()].clone().unwrap(), self.table)
     }
 }
 
