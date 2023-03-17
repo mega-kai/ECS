@@ -362,6 +362,16 @@ impl ComponentTable {
         self.try_access(comp_type)?.add(ptr, dst_entity_index)
     }
 
+    pub(crate) fn get_cell(
+        &mut self,
+        entity_index: usize,
+        comp_type: CompType,
+    ) -> Result<*mut u8, &'static str> {
+        self.try_access(comp_type)?
+            .get(entity_index)
+            .ok_or("invalid index")
+    }
+
     pub(crate) fn pop_cell(
         &mut self,
         dst_entity_index: usize,
