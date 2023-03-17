@@ -46,15 +46,6 @@ impl AccessColumn {
             .collect::<Vec<&mut C>>()
     }
 }
-impl IntoIterator for AccessColumn {
-    type Item = TableCellAccess;
-
-    type IntoIter = std::vec::IntoIter<TableCellAccess>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
 impl<'a> IntoIterator for &'a AccessColumn {
     type Item = &'a TableCellAccess;
 
@@ -102,15 +93,6 @@ impl AccessRow {
             }
             false
         }
-    }
-}
-impl IntoIterator for AccessRow {
-    type Item = TableCellAccess;
-
-    type IntoIter = std::vec::IntoIter<TableCellAccess>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
     }
 }
 impl<'a> IntoIterator for &'a AccessRow {
@@ -323,6 +305,7 @@ pub struct ComponentTable {
 
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
+// TODO: variadic component insertion, probably with tuple
 // TODO: generational indices
 impl ComponentTable {
     pub(crate) fn new() -> Self {
@@ -581,9 +564,13 @@ impl<'a> Command<'a> {
         Ok(result)
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> Result<AccessColumn, &'static str> {
-        let column = self.table.get_column(C::comp_type())?;
-        Ok(<F as Filter>::apply_on(column, self.table))
+    pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
+        let column = self.table.get_column(C::comp_type());
+        match column {
+            Ok(result) => <F as Filter>::apply_on(result, self.table),
+            // yield empty one
+            Err(error) => AccessColumn::new_empty(C::comp_type()),
+        }
     }
 }
 
@@ -726,6 +713,38 @@ mod test {
     struct Player(&'static str);
     impl Component for Player {}
 
+    fn spawn(mut command: Command) {
+        let key = command.add_component(Player("test player uwu"));
+    }
+
+    fn say_hi(mut command: Command) {
+        for player in &mut command.query::<Player, ()>().cast_vec::<Player>() {
+            println!("hi, {}", player.0);
+        }
+    }
+
+    fn remove(mut command: Command) {
+        for pl in &mut command.query::<Player, ()>() {
+            command.remove_component::<Player>(*pl).unwrap();
+        }
+    }
+
     #[test]
-    fn test() {}
+    fn test() {
+        let mut ecs = ECS::new();
+        ecs.add_system(spawn, 1, true);
+        ecs.add_system(say_hi, 2, false);
+
+        ecs.tick();
+        ecs.tick();
+        ecs.tick();
+        ecs.tick();
+        ecs.tick();
+        ecs.tick();
+        ecs.add_system(remove, 0, true);
+        ecs.tick();
+        ecs.tick();
+        ecs.tick();
+        ecs.tick();
+    }
 }
