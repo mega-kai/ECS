@@ -370,6 +370,16 @@ impl ComponentTable {
         self.try_access(comp_type)?.remove(dst_entity_index)
     }
 
+    pub(crate) fn overwrite(
+        &mut self,
+        comp_type: CompType,
+        dst_entity_index: usize,
+        ptr: *mut u8,
+    ) -> Result<*mut u8, &'static str> {
+        let access = self.try_access(comp_type)?;
+        access.overwrite(ptr, dst_entity_index)
+    }
+
     // two valid cells, pop one and overwrite the data to another
     pub(crate) fn move_cell(
         &mut self,
@@ -382,6 +392,7 @@ impl ComponentTable {
         access.overwrite(ptr, to_index)
     }
 
+    // two valid cells
     pub(crate) fn swap_cell(
         &mut self,
         comp_type: CompType,
