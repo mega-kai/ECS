@@ -564,8 +564,8 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Result<AccessColumn, &'static str> {
-        todo!()
-        // <F as Filter>::apply_on(self.table.get_column(C::comp_type()).unwrap(), self.table)
+        let column = self.table.get_column(C::comp_type())?;
+        Ok(<F as Filter>::apply_on(column, self.table))
     }
 }
 
