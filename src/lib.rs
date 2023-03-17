@@ -323,6 +323,11 @@ impl ComponentTable {
         self.table.remove(&comp_type)
     }
 
+    pub(crate) fn init_row(&mut self) -> usize {
+        self.current_entity_id += 1;
+        self.current_entity_id - 1
+    }
+
     //-----------------QUERY OPERATION-----------------//
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Option<AccessRow> {
@@ -491,22 +496,21 @@ impl<'a> Command<'a> {
         Self { table }
     }
 
-    pub fn add_component_new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
-        if self.table.get_column(C::comp_type()).is_ok() {
-            // !!! todo
-            let dst_entity_index = 0;
-            let dst_ptr = self
-                .table
-                .push_cell(
-                    dst_entity_index,
-                    C::comp_type(),
-                    (&mut component as *mut C).cast::<u8>(),
-                )
-                .unwrap();
-            TableCellAccess::new(dst_entity_index, C::comp_type(), dst_ptr)
-        } else {
-            todo!()
+    pub fn new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+        let comp_type = C::comp_type();
+        let dst_entity_index = self.table.init_row();
+        if self.table.get_column(comp_type).is_err() {
+            self.table.init_column(comp_type);
         }
+        let dst_ptr = self
+            .table
+            .push_cell(
+                dst_entity_index,
+                comp_type,
+                (&mut component as *mut C).cast::<u8>(),
+            )
+            .unwrap();
+        TableCellAccess::new(dst_entity_index, C::comp_type(), dst_ptr)
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
@@ -666,7 +670,7 @@ mod test {
     impl Component for Player {}
 
     fn spawn(mut command: Command) {
-        command.add_component_new_entity(Player("player name"));
+        command.new_entity(Player("player name"));
         println!("uwu player spawned");
     }
 
