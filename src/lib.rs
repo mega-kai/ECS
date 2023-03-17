@@ -370,6 +370,7 @@ impl ComponentTable {
         self.try_access(comp_type)?.remove(dst_entity_index)
     }
 
+    // two valid cells, pop one and overwrite the data to another
     pub(crate) fn move_cell(
         &mut self,
         comp_type: CompType,
