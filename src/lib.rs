@@ -302,12 +302,8 @@ impl ComponentTable {
     }
 
     //-----------------QUERY OPERATION-----------------//
-    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Option<AccessColumn> {
-        if let Some(access) = self.table.get(&comp_type) {
-            Some(access.yield_column_access())
-        } else {
-            None
-        }
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
+        Ok(self.try_access(comp_type)?.yield_column_access())
     }
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Option<AccessRow> {
@@ -327,17 +323,21 @@ impl ComponentTable {
     }
 
     //-----------------CELL MANIPULATION-----------------//
+
+    fn try_access(&mut self, comp_type: CompType) -> Result<&TypeErasedColumn, &'static str> {
+        if let Some(access) = self.table.get(&comp_type) {
+            Ok(access)
+        } else {
+            Err("no such type")
+        }
+    }
     pub(crate) fn push_cell(
         &mut self,
         dst_entity_index: usize,
         comp_type: CompType,
         ptr: *mut u8,
     ) -> Result<*mut u8, &'static str> {
-        if let Some(access) = self.table.get(&comp_type) {
-            access.add(ptr, dst_entity_index)
-        } else {
-            Err("no such type")
-        }
+        self.try_access(comp_type)?.add(ptr, dst_entity_index)
     }
 
     pub(crate) fn pop_cell(
@@ -345,11 +345,7 @@ impl ComponentTable {
         dst_entity_index: usize,
         comp_type: CompType,
     ) -> Result<*mut u8, &'static str> {
-        if let Some(access) = self.table.get(&comp_type) {
-            access.remove(dst_entity_index)
-        } else {
-            Err("no such type")
-        }
+        self.try_access(comp_type)?.remove(dst_entity_index)
     }
 
     pub(crate) fn move_cell(
@@ -358,6 +354,7 @@ impl ComponentTable {
         cell1_entity_index: usize,
         cell2_entity_index: usize,
     ) -> Result<(), &'static str> {
+        let access = self.try_access(comp_type)?;
         todo!()
     }
 
@@ -367,11 +364,8 @@ impl ComponentTable {
         cell1_entity_index: usize,
         cell2_entity_index: usize,
     ) -> Result<(), &'static str> {
-        if let Some(access) = self.table.get(&comp_type) {
-            access.swap(cell1_entity_index, cell2_entity_index)
-        } else {
-            Err("no such type")
-        }
+        self.try_access(comp_type)?
+            .swap(cell1_entity_index, cell2_entity_index)
     }
 }
 
