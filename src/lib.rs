@@ -219,7 +219,26 @@ impl TypeErasedColumn {
         ptr: *mut u8,
         entity_id: usize,
     ) -> Result<*mut u8, &'static str> {
-        todo!()
+        // return final ptr within the column
+        if entity_id >= self.sparse.len() {
+            return Err("index overflow");
+        }
+        if let Some(dense_index) = self.sparse[entity_id] {
+            unsafe {
+                std::ptr::copy(
+                    ptr,
+                    self.data_heap_ptr
+                        .add(dense_index * self.comp_type.layout.size()),
+                    self.comp_type.layout.size(),
+                )
+            }
+            Ok(unsafe {
+                self.data_heap_ptr
+                    .add(dense_index * self.comp_type.layout.size())
+            })
+        } else {
+            Err("trying to overwrite empty cell")
+        }
     }
 
     pub(crate) fn get(&self, entity_id: usize) -> Option<*mut u8> {
@@ -354,11 +373,12 @@ impl ComponentTable {
     pub(crate) fn move_cell(
         &mut self,
         comp_type: CompType,
-        cell1_entity_index: usize,
-        cell2_entity_index: usize,
-    ) -> Result<(), &'static str> {
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<*mut u8, &'static str> {
         let access = self.try_access(comp_type)?;
-        todo!()
+        let ptr = access.remove(from_index)?;
+        access.overwrite(ptr, to_index)
     }
 
     pub(crate) fn swap_cell(
