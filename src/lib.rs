@@ -319,10 +319,6 @@ impl ComponentTable {
             .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
     }
 
-    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
-        Ok(self.try_access(comp_type)?.yield_column_access())
-    }
-
     pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
         self.table.remove(&comp_type)
     }
@@ -343,6 +339,10 @@ impl ComponentTable {
         } else {
             Some(result)
         }
+    }
+
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
+        Ok(self.try_access(comp_type)?.yield_column_access())
     }
 
     //-----------------CELL MANIPULATION-----------------//
@@ -491,7 +491,7 @@ impl<'a> Command<'a> {
         Self { table }
     }
 
-    pub fn add_component<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+    pub fn add_component_new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         if self.table.get_column(C::comp_type()).is_ok() {
             // !!! todo
             let dst_entity_index = 0;
@@ -666,7 +666,7 @@ mod test {
     impl Component for Player {}
 
     fn spawn(mut command: Command) {
-        command.add_component(Player("player name"));
+        command.add_component_new_entity(Player("player name"));
         println!("uwu player spawned");
     }
 
