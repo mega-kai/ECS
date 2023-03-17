@@ -526,14 +526,23 @@ impl<'a> Command<'a> {
         key: TableCellAccess,
         mut component: C,
     ) -> Result<TableCellAccess, &'static str> {
-        if key.column_type == C::comp_type() {
+        let comp_type = C::comp_type();
+        if key.column_type == comp_type {
             return Err("type == type of access");
         }
         let row = self.table.get_row(key.entity_index)?;
-        if row.contains(C::comp_type()) {
+        if row.contains(comp_type) {
             return Err("type already exists in this row");
         } else {
-            todo!()
+            if self.table.get_column(comp_type).is_err() {
+                self.table.init_column(comp_type);
+            }
+            let ptr = self.table.push_cell(
+                key.entity_index,
+                comp_type,
+                (&mut component as *mut C).cast::<u8>(),
+            )?;
+            Ok(TableCellAccess::new(key.entity_index, comp_type, ptr))
         }
     }
 
