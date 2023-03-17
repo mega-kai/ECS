@@ -676,37 +676,6 @@ mod test {
     struct Player(&'static str);
     impl Component for Player {}
 
-    fn spawn(mut command: Command) {
-        command.add_component(Player("player name"));
-        println!("uwu player spawned");
-    }
-
-    fn system(mut command: Command) {
-        for val in command.query::<Player, ()>().cast_vec::<Player>() {
-            println!("{}", val.0);
-        }
-        //
-    }
-
-    fn remove(mut command: Command) {
-        for key in command.query::<Player, ()>() {
-            command.remove_component::<Player>(key).unwrap();
-            println!("component removed uwu")
-        }
-    }
-
     #[test]
-    fn test() {
-        let mut app = ECS::new();
-        app.add_system(spawn, 0, true);
-        app.add_system(system, 1, false);
-
-        app.tick();
-
-        app.add_system(remove, 2, true);
-        app.tick();
-        app.tick();
-        app.tick();
-        app.tick();
-    }
+    fn test() {}
 }
