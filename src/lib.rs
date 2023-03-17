@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables, unused_imports, unused_mut)]
-#![feature(alloc_layout_extra)]
+#![feature(alloc_layout_extra, map_try_insert)]
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut, Range, RangeBounds};
 use std::slice::SliceIndex;
@@ -86,8 +86,22 @@ impl AccessRow {
         Self(vec![], entity_id)
     }
 
-    pub(crate) fn contains(&self, comp_type: CompType) -> bool {
-        todo!()
+    pub(crate) fn contains(&self, comp_type: CompType, exclude_index: Option<usize>) -> bool {
+        if let Some(index) = exclude_index {
+            for access in self {
+                if access.column_type == comp_type && access.entity_index != index {
+                    return true;
+                }
+            }
+            false
+        } else {
+            for access in self {
+                if access.column_type == comp_type {
+                    return true;
+                }
+            }
+            false
+        }
     }
 }
 impl IntoIterator for AccessRow {
@@ -339,6 +353,9 @@ impl ComponentTable {
     //-----------------QUERY OPERATION-----------------//
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Result<AccessRow, &'static str> {
+        if entity_index > self.current_entity_id {
+            return Err("index overflow");
+        }
         let mut result = AccessRow::new(vec![], entity_index);
         for (k, v) in &self.table {
             if let Some(val) = v.get(entity_index) {
@@ -369,7 +386,9 @@ impl ComponentTable {
     }
 
     fn ensure_access(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
-        todo!()
+        self.table
+            .entry(comp_type)
+            .or_insert(TypeErasedColumn::new(comp_type, 64))
     }
 
     // if not column not init, init it automatically
@@ -532,16 +551,14 @@ impl<'a> Command<'a> {
         mut component: C,
     ) -> Result<TableCellAccess, &'static str> {
         let comp_type = C::comp_type();
+        // making sure they are different types
         if key.column_type == comp_type {
             return Err("type == type of access");
         }
         let row = self.table.get_row(key.entity_index)?;
-        if row.contains(comp_type) {
+        if row.contains(comp_type, None) {
             return Err("type already exists in this row");
         } else {
-            if self.table.get_column(comp_type).is_err() {
-                self.table.init_column(comp_type);
-            }
             let access = self.table.push_cell(
                 key.entity_index,
                 comp_type,
