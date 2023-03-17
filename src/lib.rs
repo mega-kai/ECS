@@ -430,8 +430,9 @@ impl<FilterComp: Component> With<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.get_row(x.entity_index).unwrap() {
-                if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
+            for row_member in table.get_row(x.entity_index).unwrap() {
+                if row_member.column_type == FilterComp::comp_type()
+                    && row_member.entity_index != x.entity_index
                 {
                     return true;
                 }
@@ -449,8 +450,9 @@ impl<FilterComp: Component> Without<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table.get_row(x.entity_index).unwrap() {
-                if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
+            for row_member in table.get_row(x.entity_index).unwrap() {
+                if row_member.column_type == FilterComp::comp_type()
+                    && row_member.entity_index != x.entity_index
                 {
                     return false;
                 }
