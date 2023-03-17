@@ -293,6 +293,9 @@ impl ComponentTable {
 
     //-----------------COLUMN MANIPULATION-----------------//
     pub(crate) fn init_column(&mut self, comp_type: CompType) {
+        if self.try_access(comp_type).is_ok() {
+            panic!("type cannot be init twice")
+        }
         self.table
             .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
     }
