@@ -85,6 +85,10 @@ impl AccessRow {
     pub(crate) fn new_empty(entity_id: usize) -> Self {
         Self(vec![], entity_id)
     }
+
+    pub(crate) fn contains(&self, comp_type: CompType) -> bool {
+        todo!()
+    }
 }
 impl IntoIterator for AccessRow {
     type Item = TableCellAccess;
@@ -333,7 +337,7 @@ impl ComponentTable {
 
     //-----------------QUERY OPERATION-----------------//
 
-    pub(crate) fn get_row(&mut self, entity_index: usize) -> Option<AccessRow> {
+    pub(crate) fn get_row(&mut self, entity_index: usize) -> Result<AccessRow, &'static str> {
         let mut result = AccessRow::new(vec![], entity_index);
         for (k, v) in &self.table {
             if let Some(val) = v.get(entity_index) {
@@ -343,9 +347,9 @@ impl ComponentTable {
             }
         }
         if result.0.is_empty() {
-            None
+            Err("row at index doesn;t exist")
         } else {
-            Some(result)
+            Ok(result)
         }
     }
 
@@ -522,7 +526,15 @@ impl<'a> Command<'a> {
         key: TableCellAccess,
         mut component: C,
     ) -> Result<TableCellAccess, &'static str> {
-        todo!()
+        if key.column_type == C::comp_type() {
+            return Err("type == type of access");
+        }
+        let row = self.table.get_row(key.entity_index)?;
+        if row.contains(C::comp_type()) {
+            return Err("type already exists in this row");
+        } else {
+            todo!()
+        }
     }
 
     pub fn remove_component<C: Component>(
@@ -532,8 +544,9 @@ impl<'a> Command<'a> {
         todo!()
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        <F as Filter>::apply_on(self.table.get_column(C::comp_type()).unwrap(), self.table)
+    pub fn query<C: Component, F: Filter>(&mut self) -> Result<AccessColumn, &'static str> {
+        todo!()
+        // <F as Filter>::apply_on(self.table.get_column(C::comp_type()).unwrap(), self.table)
     }
 }
 
