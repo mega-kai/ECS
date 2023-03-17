@@ -75,8 +75,8 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 #[derive(Clone)]
 pub struct AccessRow(pub(crate) Vec<TableCellAccess>, pub(crate) usize);
 impl AccessRow {
-    pub(crate) fn new(access_vec: Vec<TableCellAccess>, entity_id: usize) -> Self {
-        Self(access_vec, entity_id)
+    pub(crate) fn new(access_vec: Vec<TableCellAccess>, entity_index: usize) -> Self {
+        Self(access_vec, entity_index)
     }
 
     pub(crate) fn new_empty(entity_id: usize) -> Self {
@@ -140,19 +140,40 @@ pub(crate) struct TypeErasedColumn {
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
     pub(crate) len: usize,
+    // usize == dense_index
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
-    pub(crate) fn query_all_access(&self) -> Vec<(usize, *mut u8)> {
-        let mut result_vec: Vec<(usize, *mut u8)> = vec![];
+    pub(crate) fn yield_column_access(&self) -> AccessColumn {
+        let mut result_vec = AccessColumn::new_empty(self.comp_type);
         for val in self.sparse.iter() {
             if let Some(current_id) = val {
-                result_vec.push((*current_id, unsafe { self.get(*current_id).unwrap() }));
+                result_vec
+                    .0
+                    .push(TableCellAccess::new(*current_id, self.comp_type, unsafe {
+                        self.get(*current_id).unwrap()
+                    }));
             } else {
                 continue;
             }
         }
         result_vec
+    }
+
+    pub(crate) fn swap(&self, index1: usize, index2: usize) -> Result<(), &'static str> {
+        if index1 >= self.sparse.len() || index2 >= self.sparse.len() {
+            Err("index overflow")
+        } else {
+            let dense_index1 = self.sparse[index1];
+            let dense_index2 = self.sparse[index2];
+            if dense_index1.is_none() || dense_index2.is_none() {
+                Err("index invalid")
+            } else {
+                self.sparse[index1] = dense_index2;
+                self.sparse[index2] = dense_index1;
+                Ok(())
+            }
+        }
     }
 
     pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
@@ -188,24 +209,28 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) unsafe fn get(&self, entity_id: usize) -> Option<*mut u8> {
+    pub(crate) fn get(&self, entity_id: usize) -> Option<*mut u8> {
         if entity_id >= self.sparse.len() {
             None
         } else {
-            Some(
-                self.data_heap_ptr
-                    .add(entity_id * self.comp_type.layout.size()),
-            )
+            if let Some(dense_index) = self.sparse[entity_id] {
+                Some(unsafe {
+                    self.data_heap_ptr
+                        .add(dense_index * self.comp_type.layout.size())
+                })
+            } else {
+                None
+            }
         }
     }
 
-    pub(crate) unsafe fn remove(&mut self, entity_id: usize) -> Option<*mut u8> {
+    pub(crate) fn remove(&mut self, entity_id: usize) -> Option<*mut u8> {
         if entity_id >= self.sparse.len() {
             None
         } else {
             let num = self.sparse[entity_id].unwrap();
             self.sparse[entity_id] = None;
-            Some(self.data_heap_ptr.add(num * self.comp_type.layout.size()))
+            Some(unsafe { self.data_heap_ptr.add(num * self.comp_type.layout.size()) })
         }
     }
 
@@ -259,11 +284,27 @@ impl ComponentTable {
 
     //-----------------QUERY OPERATION-----------------//
     pub(crate) fn get_column(&mut self, comp_type: CompType) -> Option<AccessColumn> {
-        todo!()
+        if let Some(access) = self.table.get(&comp_type) {
+            Some(access.yield_column_access())
+        } else {
+            None
+        }
     }
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Option<AccessRow> {
-        todo!()
+        let mut result = AccessRow::new(vec![], entity_index);
+        for (k, v) in &self.table {
+            if let Some(val) = v.get(entity_index) {
+                result.0.push(TableCellAccess::new(entity_index, *k, val));
+            } else {
+                continue;
+            }
+        }
+        if result.0.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
     }
 
     //-----------------CELL MANIPULATION-----------------//
@@ -271,19 +312,25 @@ impl ComponentTable {
         &mut self,
         dst_entity_index: usize,
         comp_type: CompType,
-        // ptr to the component
         ptr: *mut u8,
     ) -> Result<*mut u8, &'static str> {
-        todo!()
+        if let Some(access) = self.table.get(&comp_type) {
+            Ok(access.add(ptr, dst_entity_index))
+        } else {
+            Err("no such type")
+        }
     }
 
     pub(crate) fn pop_cell(
         &mut self,
         dst_entity_index: usize,
         comp_type: CompType,
-        ptr: *mut u8,
     ) -> Result<*mut u8, &'static str> {
-        todo!()
+        if let Some(access) = self.table.get(&comp_type) {
+            access.remove(dst_entity_index).ok_or("wrong index")
+        } else {
+            Err("no such type")
+        }
     }
 
     pub(crate) fn swap_cell(
