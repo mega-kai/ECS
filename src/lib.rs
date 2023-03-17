@@ -148,11 +148,11 @@ impl TypeErasedColumn {
         let mut result_vec = AccessColumn::new_empty(self.comp_type);
         for val in self.sparse.iter() {
             if let Some(current_id) = val {
-                result_vec
-                    .0
-                    .push(TableCellAccess::new(*current_id, self.comp_type, unsafe {
-                        self.get(*current_id).unwrap()
-                    }));
+                result_vec.0.push(TableCellAccess::new(
+                    *current_id,
+                    self.comp_type,
+                    self.get(*current_id).unwrap(),
+                ));
             } else {
                 continue;
             }
@@ -160,7 +160,7 @@ impl TypeErasedColumn {
         result_vec
     }
 
-    pub(crate) fn swap(&self, index1: usize, index2: usize) -> Result<(), &'static str> {
+    pub(crate) fn swap(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
         if index1 >= self.sparse.len() || index2 >= self.sparse.len() {
             Err("index overflow")
         } else {
@@ -346,8 +346,8 @@ impl ComponentTable {
 
     //-----------------CELL MANIPULATION-----------------//
 
-    fn try_access(&mut self, comp_type: CompType) -> Result<&TypeErasedColumn, &'static str> {
-        if let Some(access) = self.table.get(&comp_type) {
+    fn try_access(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
+        if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
         } else {
             Err("no such type")
@@ -391,7 +391,7 @@ impl ComponentTable {
     }
 
     // two valid cells, pop one and overwrite the data to another
-    pub(crate) fn move_cell(
+    pub(crate) fn move_overwrite_cell(
         &mut self,
         comp_type: CompType,
         from_index: usize,
@@ -430,7 +430,7 @@ impl<FilterComp: Component> With<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table[x.entity_index].clone().unwrap() {
+            for val in table.get_row(x.entity_index).unwrap() {
                 if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
                 {
                     return true;
@@ -449,7 +449,7 @@ impl<FilterComp: Component> Without<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for val in table[x.entity_index].clone().unwrap() {
+            for val in table.get_row(x.entity_index).unwrap() {
                 if val.column_type == FilterComp::comp_type() && val.entity_index != x.entity_index
                 {
                     return false;
@@ -499,7 +499,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        <F as Filter>::apply_on(self.table[C::comp_type()].clone().unwrap(), self.table)
+        <F as Filter>::apply_on(self.table.get_column(C::comp_type()).unwrap(), self.table)
     }
 }
 
