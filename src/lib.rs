@@ -317,12 +317,10 @@ impl TypeErasedColumn {
 }
 
 pub struct ComponentTable {
-    // TODO: make this vec indexable with comptype
     table: HashMap<CompType, TypeErasedColumn>,
     current_entity_id: usize,
 }
 
-// TODO: completely remove the type generics of this data strcuture
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
@@ -365,7 +363,7 @@ impl ComponentTable {
             }
         }
         if result.0.is_empty() {
-            Err("row at index doesn;t exist")
+            Err("row is empty")
         } else {
             Ok(result)
         }
@@ -472,12 +470,12 @@ impl<FilterComp: Component> With<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for row_member in table.get_row(x.entity_index).unwrap() {
-                if row_member.column_type == FilterComp::comp_type()
-                    && row_member.entity_index != x.entity_index
-                {
-                    return true;
-                }
+            if table
+                .get_row(x.entity_index)
+                .unwrap()
+                .contains(FilterComp::comp_type(), Some(x.entity_index))
+            {
+                return true;
             }
             return false;
         });
@@ -492,12 +490,12 @@ impl<FilterComp: Component> Without<FilterComp> {
         table: &mut ComponentTable,
     ) -> AccessColumn {
         vec.0.retain(|x| {
-            for row_member in table.get_row(x.entity_index).unwrap() {
-                if row_member.column_type == FilterComp::comp_type()
-                    && row_member.entity_index != x.entity_index
-                {
-                    return false;
-                }
+            if table
+                .get_row(x.entity_index)
+                .unwrap()
+                .contains(FilterComp::comp_type(), Some(x.entity_index))
+            {
+                return false;
             }
             return true;
         });
