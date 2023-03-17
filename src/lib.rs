@@ -319,14 +319,15 @@ impl ComponentTable {
             .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
     }
 
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
+        Ok(self.try_access(comp_type)?.yield_column_access())
+    }
+
     pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
         self.table.remove(&comp_type)
     }
 
     //-----------------QUERY OPERATION-----------------//
-    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
-        Ok(self.try_access(comp_type)?.yield_column_access())
-    }
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Option<AccessRow> {
         let mut result = AccessRow::new(vec![], entity_index);
@@ -490,9 +491,22 @@ impl<'a> Command<'a> {
         Self { table }
     }
 
-    pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        // self.table.push_cell(dst_entity_index, comp_type, ptr)
-        todo!()
+    pub fn add_component<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+        if self.table.get_column(C::comp_type()).is_ok() {
+            // !!! todo
+            let dst_entity_index = 0;
+            let dst_ptr = self
+                .table
+                .push_cell(
+                    dst_entity_index,
+                    C::comp_type(),
+                    (&mut component as *mut C).cast::<u8>(),
+                )
+                .unwrap();
+            TableCellAccess::new(dst_entity_index, C::comp_type(), dst_ptr)
+        } else {
+            todo!()
+        }
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
