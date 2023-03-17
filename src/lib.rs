@@ -321,6 +321,9 @@ pub struct ComponentTable {
     current_entity_id: usize,
 }
 
+// TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
+// TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
+// TODO: generational indices
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
