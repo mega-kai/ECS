@@ -496,8 +496,15 @@ impl<'a> Command<'a> {
     }
 
     pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
-        // self.table.remove_cell::<C>(key).unwrap()
-        todo!()
+        unsafe {
+            self.table
+                .pop_cell(key.entity_index, key.column_type)
+                .unwrap()
+                .cast::<C>()
+                .as_mut()
+                .unwrap()
+                .clone()
+        }
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
