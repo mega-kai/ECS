@@ -491,7 +491,7 @@ impl<'a> Command<'a> {
     }
 
     pub fn add_component<C: Component>(&mut self, component: C) -> TableCellAccess {
-        // self.table.push_cell(component)
+        // self.table.push_cell(dst_entity_index, comp_type, ptr)
         todo!()
     }
 
