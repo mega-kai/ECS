@@ -318,12 +318,13 @@ impl ComponentTable {
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    pub(crate) fn init_column(&mut self, comp_type: CompType) {
+    pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
         if self.try_access(comp_type).is_ok() {
             panic!("type cannot be init twice")
         }
         self.table
             .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
+        self.table.get_mut(&comp_type).unwrap()
     }
 
     pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
@@ -366,23 +367,32 @@ impl ComponentTable {
             Err("no such type")
         }
     }
+
+    fn ensure_access(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
+        todo!()
+    }
+
+    // if not column not init, init it automatically
     pub(crate) fn push_cell(
         &mut self,
         dst_entity_index: usize,
         comp_type: CompType,
         ptr: *mut u8,
-    ) -> Result<*mut u8, &'static str> {
-        self.try_access(comp_type)?.add(ptr, dst_entity_index)
+    ) -> Result<TableCellAccess, &'static str> {
+        let ptr = self.ensure_access(comp_type).add(ptr, dst_entity_index)?;
+        Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr))
     }
 
     pub(crate) fn get_cell(
         &mut self,
         entity_index: usize,
         comp_type: CompType,
-    ) -> Result<*mut u8, &'static str> {
-        self.try_access(comp_type)?
+    ) -> Result<TableCellAccess, &'static str> {
+        let ptr = self
+            .try_access(comp_type)?
             .get(entity_index)
-            .ok_or("invalid index")
+            .ok_or("invalid index")?;
+        Ok(TableCellAccess::new(entity_index, comp_type, ptr))
     }
 
     pub(crate) fn pop_cell(
@@ -506,18 +516,13 @@ impl<'a> Command<'a> {
     pub fn add_component<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         let comp_type = C::comp_type();
         let dst_entity_index = self.table.init_row();
-        if self.table.get_column(comp_type).is_err() {
-            self.table.init_column(comp_type);
-        }
-        let dst_ptr = self
-            .table
+        self.table
             .push_cell(
                 dst_entity_index,
                 comp_type,
                 (&mut component as *mut C).cast::<u8>(),
             )
-            .unwrap();
-        TableCellAccess::new(dst_entity_index, C::comp_type(), dst_ptr)
+            .unwrap()
     }
 
     // key or entity index? usize or generational index?
@@ -537,12 +542,12 @@ impl<'a> Command<'a> {
             if self.table.get_column(comp_type).is_err() {
                 self.table.init_column(comp_type);
             }
-            let ptr = self.table.push_cell(
+            let access = self.table.push_cell(
                 key.entity_index,
                 comp_type,
                 (&mut component as *mut C).cast::<u8>(),
             )?;
-            Ok(TableCellAccess::new(key.entity_index, comp_type, ptr))
+            Ok(access)
         }
     }
 
@@ -550,7 +555,12 @@ impl<'a> Command<'a> {
         &mut self,
         key: TableCellAccess,
     ) -> Result<C, &'static str> {
-        todo!()
+        if key.column_type != C::comp_type() {
+            return Err("type not matching");
+        }
+        let ptr = self.table.pop_cell(key.entity_index, key.column_type)?;
+        let result = unsafe { ptr.cast::<C>().as_mut().unwrap().clone() };
+        Ok(result)
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> Result<AccessColumn, &'static str> {
