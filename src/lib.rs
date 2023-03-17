@@ -25,6 +25,9 @@ impl TableCellAccess {
             access,
         }
     }
+    pub fn yield_entity_index(&self) -> usize {
+        self.entity_index
+    }
 }
 
 // all with the same component type
@@ -496,7 +499,7 @@ impl<'a> Command<'a> {
         Self { table }
     }
 
-    pub fn new_entity<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+    pub fn add_component<C: Component>(&mut self, mut component: C) -> TableCellAccess {
         let comp_type = C::comp_type();
         let dst_entity_index = self.table.init_row();
         if self.table.get_column(comp_type).is_err() {
@@ -513,16 +516,20 @@ impl<'a> Command<'a> {
         TableCellAccess::new(dst_entity_index, C::comp_type(), dst_ptr)
     }
 
-    pub fn remove_component<C: Component>(&mut self, key: TableCellAccess) -> C {
-        unsafe {
-            self.table
-                .pop_cell(key.entity_index, key.column_type)
-                .unwrap()
-                .cast::<C>()
-                .as_mut()
-                .unwrap()
-                .clone()
-        }
+    // key or entity index? usize or generational index?
+    pub fn attach_component<C: Component>(
+        &mut self,
+        key: TableCellAccess,
+        mut component: C,
+    ) -> Result<TableCellAccess, &'static str> {
+        todo!()
+    }
+
+    pub fn remove_component<C: Component>(
+        &mut self,
+        key: TableCellAccess,
+    ) -> Result<C, &'static str> {
+        todo!()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
@@ -670,7 +677,7 @@ mod test {
     impl Component for Player {}
 
     fn spawn(mut command: Command) {
-        command.new_entity(Player("player name"));
+        command.add_component(Player("player name"));
         println!("uwu player spawned");
     }
 
@@ -683,7 +690,7 @@ mod test {
 
     fn remove(mut command: Command) {
         for key in command.query::<Player, ()>() {
-            command.remove_component::<Player>(key);
+            command.remove_component::<Player>(key).unwrap();
             println!("component removed uwu")
         }
     }
