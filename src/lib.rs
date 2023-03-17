@@ -189,7 +189,11 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) -> *mut u8 {
+    pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) -> Result<*mut u8, &'static str> {
+        if self.get(entity_id).is_some() {
+            return Err("cell taken");
+        }
+
         if entity_id >= self.sparse.len() {
             self.sparse.resize(entity_id + 1, None);
         }
@@ -205,8 +209,17 @@ impl TypeErasedColumn {
                 .data_heap_ptr
                 .add(self.len * self.comp_type.layout.size());
             std::ptr::copy(ptr, raw_dst_ptr, self.comp_type.layout.size());
-            raw_dst_ptr
+            self.len += 1;
+            Ok(raw_dst_ptr)
         }
+    }
+
+    pub(crate) fn overwrite(
+        &self,
+        ptr: *mut u8,
+        entity_id: usize,
+    ) -> Result<*mut u8, &'static str> {
+        todo!()
     }
 
     pub(crate) fn get(&self, entity_id: usize) -> Option<*mut u8> {
@@ -224,13 +237,19 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn remove(&mut self, entity_id: usize) -> Option<*mut u8> {
+    pub(crate) fn remove(&mut self, entity_id: usize) -> Result<*mut u8, &'static str> {
         if entity_id >= self.sparse.len() {
-            None
+            Err("index overflow")
         } else {
-            let num = self.sparse[entity_id].unwrap();
-            self.sparse[entity_id] = None;
-            Some(unsafe { self.data_heap_ptr.add(num * self.comp_type.layout.size()) })
+            if let Some(dense_index) = self.sparse[entity_id] {
+                self.sparse[entity_id] = None;
+                Ok(unsafe {
+                    self.data_heap_ptr
+                        .add(dense_index * self.comp_type.layout.size())
+                })
+            } else {
+                return Err("trying to remove empty cell");
+            }
         }
     }
 
@@ -315,7 +334,7 @@ impl ComponentTable {
         ptr: *mut u8,
     ) -> Result<*mut u8, &'static str> {
         if let Some(access) = self.table.get(&comp_type) {
-            Ok(access.add(ptr, dst_entity_index))
+            access.add(ptr, dst_entity_index)
         } else {
             Err("no such type")
         }
@@ -327,10 +346,19 @@ impl ComponentTable {
         comp_type: CompType,
     ) -> Result<*mut u8, &'static str> {
         if let Some(access) = self.table.get(&comp_type) {
-            access.remove(dst_entity_index).ok_or("wrong index")
+            access.remove(dst_entity_index)
         } else {
             Err("no such type")
         }
+    }
+
+    pub(crate) fn move_cell(
+        &mut self,
+        comp_type: CompType,
+        cell1_entity_index: usize,
+        cell2_entity_index: usize,
+    ) -> Result<(), &'static str> {
+        todo!()
     }
 
     pub(crate) fn swap_cell(
@@ -339,7 +367,11 @@ impl ComponentTable {
         cell1_entity_index: usize,
         cell2_entity_index: usize,
     ) -> Result<(), &'static str> {
-        todo!()
+        if let Some(access) = self.table.get(&comp_type) {
+            access.swap(cell1_entity_index, cell2_entity_index)
+        } else {
+            Err("no such type")
+        }
     }
 }
 
