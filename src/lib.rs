@@ -312,7 +312,6 @@ pub struct ComponentTable {
 }
 
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
-// TODO: turning the input/output entirely on tablecell access
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
 // TODO: generational indices
@@ -357,6 +356,8 @@ impl ComponentTable {
         }
         Ok(self.row_cache[entity_index].clone())
     }
+
+    //-----------------ROW CACHE HELPERS-----------------//
 
     //-----------------CELL MANIPULATION HELPERS-----------------//
     fn try_column(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
