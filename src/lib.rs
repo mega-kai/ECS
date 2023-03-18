@@ -270,7 +270,7 @@ impl TypeErasedSparseSet {
         unsafe {
             Ok(self
                 .data_heap_ptr
-                .add(self.comp_types.total_layout().size() * (dense_index - 1) + offset))
+                .add(self.comp_types.total_layout().size() * dense_index + offset))
         }
     }
 
@@ -287,13 +287,24 @@ impl TypeErasedSparseSet {
     }
 
     fn get_sparse_index(&self, dense_index: usize) -> usize {
-        todo!()
+        unsafe {
+            self.data_heap_ptr
+                .add(self.comp_types.total_layout().size() * dense_index)
+                .cast::<usize>()
+                .as_mut()
+                .unwrap()
+                .clone()
+        }
     }
 
     /// get_dense_index + get_dense_ptr
-    pub(crate) fn get(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
+    pub(crate) fn get(
+        &self,
+        entity_id: usize,
+        comp_type: CompType,
+    ) -> Result<*mut u8, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
-        Ok(self.get_dense_ptr(dense_index))
+        Ok(self.get_dense_ptr(dense_index, comp_type)?)
     }
 
     // todo return type should be changed
