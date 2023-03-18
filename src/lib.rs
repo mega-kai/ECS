@@ -84,7 +84,7 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 // all with the same id and and must have diff types
 #[derive(Clone)]
 pub struct AccessRow {
-    // not ordered; CONSIDER: turn it into a hash map
+    // not ordered; CONSIDER: turn it into a hash map where k:comp_type
     pub(crate) access_vec: Vec<TableCellAccess>,
     pub(crate) entity_index: usize,
 }
@@ -122,9 +122,8 @@ impl AccessRow {
         }
     }
 
-    // for generational index
     pub(crate) fn contains_access(&self, key: TableCellAccess) -> bool {
-        todo!()
+        self.access_vec.contains(&key)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -180,7 +179,7 @@ pub trait Component: Clone + 'static {
     }
 }
 
-pub(crate) struct TypeErasedColumn {
+pub(crate) struct TypeErasedSparseSet {
     comp_type: CompType,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
@@ -188,7 +187,22 @@ pub(crate) struct TypeErasedColumn {
     // usize == dense_index
     pub(crate) sparse: Vec<Option<usize>>,
 }
-impl TypeErasedColumn {
+impl TypeErasedSparseSet {
+    /// todo make this column type hold more than one type of data;
+    /// the first sizeof(usize) bytes would always contain the sparse index
+    pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
+        assert!(comp_type.layout.size() != 0, "type is a ZST",);
+
+        let data_heap_ptr = unsafe { std::alloc::alloc(comp_type.layout.repeat(size).unwrap().0) };
+        Self {
+            comp_type,
+            data_heap_ptr,
+            capacity: size,
+            len: 0,
+            sparse: vec![None; size],
+        }
+    }
+
     //-----------------HELPERS-----------------//
     /// must ensure this ptr is valid first
     fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
@@ -210,16 +224,25 @@ impl TypeErasedColumn {
         }
     }
 
-    //-----------------OPERATIONS-----------------//
+    fn get_sparse_index(&self, dense_index: usize) -> usize {
+        todo!()
+    }
+
+    /// get_dense_index + get_dense_ptr
+    pub(crate) fn get(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
+        let dense_index = self.get_dense_index(entity_id)?;
+        Ok(self.get_dense_ptr(dense_index))
+    }
+
     // todo return type should be changed
-    pub(crate) fn yield_column_access(&self) -> AccessColumn {
+    pub(crate) fn get_all(&self) -> AccessColumn {
         let mut result_vec = AccessColumn::new_empty(self.comp_type);
         for val in self.sparse.iter() {
             if let Some(current_id) = val {
                 result_vec.0.push(TableCellAccess::new(
                     *current_id,
                     self.comp_type,
-                    self.is_valid_raw(*current_id).unwrap(),
+                    self.get(*current_id).unwrap(),
                     // todo generation
                     0,
                 ));
@@ -230,21 +253,10 @@ impl TypeErasedColumn {
         result_vec
     }
 
-    pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
-        assert!(comp_type.layout.size() != 0, "type is a ZST",);
-
-        let data_heap_ptr = unsafe { std::alloc::alloc(comp_type.layout.repeat(size).unwrap().0) };
-        Self {
-            comp_type,
-            data_heap_ptr,
-            capacity: size,
-            len: 0,
-            sparse: vec![None; size],
-        }
-    }
+    //-----------------OPERATIONS-----------------//
 
     pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) -> Result<*mut u8, &'static str> {
-        if self.is_valid_raw(entity_id).is_ok() {
+        if self.get(entity_id).is_ok() {
             return Err("cell taken");
         }
 
@@ -288,26 +300,24 @@ impl TypeErasedColumn {
         Ok(vec)
     }
 
-    /// if empty returns err, else returns a dense ptr to that cell
-    pub(crate) fn is_valid_raw(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
-        let dense_index = self.get_dense_index(entity_id)?;
-        Ok(self.get_dense_ptr(dense_index))
-    }
-
-    // todo should move the last one of the dense vec to the spot now empty, and remap the sparse thing
     pub(crate) fn remove(&mut self, entity_id: usize) -> Result<Vec<u8>, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
         self.sparse[entity_id] = None;
         let src_ptr = self.get_dense_ptr(dense_index);
-        let mut vec: Vec<u8> = vec![];
+        let mut result_vec: Vec<u8> = vec![];
         unsafe {
-            std::ptr::copy(src_ptr, vec.as_mut_ptr(), self.comp_type.layout.size());
+            std::ptr::copy(
+                src_ptr,
+                result_vec.as_mut_ptr(),
+                self.comp_type.layout.size(),
+            );
         }
-        Ok(vec)
+        // todo in order to be able to index the item in sparse vec and remap it, the dense vec must first hold that sparse index
+        Ok(result_vec)
     }
 
     // "shallow swap"
-    pub(crate) fn swap(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
+    pub(crate) fn swap_within(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
         let dense_index1 = self.get_dense_index(index1)?;
         let dense_index2 = self.get_dense_index(index2)?;
         self.sparse[index1] = Some(dense_index2);
@@ -315,6 +325,7 @@ impl TypeErasedColumn {
         Ok(())
     }
 
+    //-----------------ALLOCATION-----------------//
     fn double_dense_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
@@ -339,66 +350,70 @@ impl TypeErasedColumn {
 }
 
 pub struct ComponentTable {
-    table: HashMap<CompType, TypeErasedColumn>,
+    // with this column containing both component and generational index
+    table: HashMap<CompType, TypeErasedSparseSet>,
     // all valid cells in this row; indexed by entity index
-    row_type_cache: HashMap<usize, TypeErasedColumn>,
-    generation_map: HashMap<Location, usize>,
-    current_entity_id: usize,
+    row_type_cache: HashMap<usize, AccessRow>,
+    bottom_row_id: usize,
 }
 
 // TODO: generational indices
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
+// TODO: refactoring api to location/pointer/generation seperate
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
+// TODO: memory safety of TableCellAccess, possible seperation of mut acc and shared acc
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             table: HashMap::new(),
             row_type_cache: HashMap::new(),
-            generation_map: HashMap::new(),
-            current_entity_id: 0,
+            bottom_row_id: 0,
         }
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
+    pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut TypeErasedSparseSet {
         if self.try_column(comp_type).is_ok() {
             panic!("type cannot be init twice")
         }
         self.table
-            .insert(comp_type, TypeErasedColumn::new(comp_type, 64));
+            .insert(comp_type, TypeErasedSparseSet::new(comp_type, 64));
         self.table.get_mut(&comp_type).unwrap()
     }
 
     pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
-        Ok(self.try_column(comp_type)?.yield_column_access())
+        Ok(self.try_column(comp_type)?.get_all())
     }
 
-    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
+    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedSparseSet> {
         self.table.remove(&comp_type)
     }
 
     //-----------------ROW MANIPULATION-----------------//
     pub(crate) fn init_row(&mut self) -> usize {
-        self.current_entity_id += 1;
+        self.bottom_row_id += 1;
         self.row_type_cache.insert(
-            self.current_entity_id - 1,
-            // ???
-            TypeErasedColumn::new(CompType::new::<CompType>(), 64),
+            self.bottom_row_id - 1,
+            AccessRow::new_empty(self.bottom_row_id - 1),
         );
-        self.current_entity_id - 1
+        self.bottom_row_id - 1
     }
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Result<AccessRow, &'static str> {
-        // todo assemble the access vector with entity_index, comp types from cache and generation from generation map
-        if entity_index > self.current_entity_id {
-            return Err("index overflow");
-        }
-        todo!()
+        // since init row ensures the existence of all row cache
+        let cache = self
+            .row_type_cache
+            .get(&entity_index)
+            .ok_or("index overflow")?;
+        Ok(cache.clone())
     }
 
     //-----------------CELL MANIPULATION HELPERS-----------------//
-    fn try_column(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
+    fn try_column(
+        &mut self,
+        comp_type: CompType,
+    ) -> Result<&mut TypeErasedSparseSet, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
         } else {
@@ -406,10 +421,10 @@ impl ComponentTable {
         }
     }
 
-    fn ensure_column(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
+    fn ensure_column(&mut self, comp_type: CompType) -> &mut TypeErasedSparseSet {
         self.table
             .entry(comp_type)
-            .or_insert(TypeErasedColumn::new(comp_type, 64))
+            .or_insert(TypeErasedSparseSet::new(comp_type, 64))
     }
 
     /// bypassing generational index; if empty, returns err, else returns raw ptr
@@ -418,27 +433,7 @@ impl ComponentTable {
         entity_index: usize,
         comp_type: CompType,
     ) -> Result<*mut u8, &'static str> {
-        Ok(self.try_column(comp_type)?.is_valid_raw(entity_index)?)
-    }
-
-    //-----------------ROW CACHE HELPERS-----------------//
-    fn try_row_cache(
-        &mut self,
-        entity_index: usize,
-        // todo the ok type should be changed
-    ) -> Result<&mut TypeErasedColumn, &'static str> {
-        self.row_type_cache
-            .get_mut(&entity_index)
-            .ok_or("row doesn't exist")
-    }
-
-    /// on the caller to ensure that this row doesn't already contain a comp_type that's the same
-    unsafe fn add_row_cache(
-        &mut self,
-        entity_index: usize,
-        comp_type: CompType,
-    ) -> Result<(), &'static str> {
-        todo!()
+        Ok(self.try_column(comp_type)?.get(entity_index)?)
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -451,16 +446,13 @@ impl ComponentTable {
         ptr: *mut u8,
     ) -> Result<TableCellAccess, &'static str> {
         let ptr = self.ensure_column(comp_type).add(ptr, dst_entity_index)?;
-        unsafe {
-            self.add_row_cache(dst_entity_index, comp_type)?;
-        }
+        // todo cache
         // todo generation
         Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr, 0))
     }
 
     pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Vec<u8>, &'static str> {
         // todo cache
-        self.try_row_cache(key.entity_index())?;
         self.try_column(key.column_type())?
             .remove(key.entity_index())
     }
@@ -472,6 +464,7 @@ impl ComponentTable {
         key: TableCellAccess,
         ptr: *mut u8,
     ) -> Result<Vec<u8>, &'static str> {
+        // todo cache
         let column = self.try_column(key.column_type())?;
         column.replace(ptr, key.entity_index())
     }
@@ -488,7 +481,8 @@ impl ComponentTable {
             let ptr = self
                 .try_column(from_key.column_type())?
                 .add(from_key.access, to_index)?;
-            // todo
+            // todo cache
+            // todo generation
             let new_access = TableCellAccess::new(to_index, from_key.column_type(), ptr, 0);
             Ok(new_access)
         } else {
@@ -502,11 +496,12 @@ impl ComponentTable {
         from_key: TableCellAccess,
         to_key: TableCellAccess,
     ) -> Result<Vec<u8>, &'static str> {
+        // todo cache
         if from_key.column_type() != to_key.column_type() {
             return Err("not on the same column");
         }
         let column = self.try_column(from_key.column_type())?;
-        let ptr = column.is_valid_raw(from_key.entity_index())?;
+        let ptr = column.get(from_key.entity_index())?;
         let vec = column.replace(ptr, to_key.entity_index());
         vec
     }
@@ -520,8 +515,9 @@ impl ComponentTable {
         if key1.column_type() != key2.column_type() {
             return Err("not on the same column");
         }
+        // todo cache
         self.try_column(key1.column_type())?
-            .swap(key1.entity_index(), key2.entity_index())
+            .swap_within(key1.entity_index(), key2.entity_index())
     }
 }
 
@@ -598,6 +594,7 @@ impl Filter for () {
 pub struct Command<'a> {
     table: &'a mut ComponentTable,
 }
+
 // TODO: turns the api into wrapper functions of those in impl ComponentTable
 impl<'a> Command<'a> {
     pub(crate) fn new(table: &'a mut ComponentTable) -> Self {
