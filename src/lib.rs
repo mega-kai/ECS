@@ -337,12 +337,15 @@ impl ComponentTable {
         self.table.get_mut(&comp_type).unwrap()
     }
 
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
+        Ok(self.try_access(comp_type)?.yield_column_access())
+    }
+
     pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
         self.table.remove(&comp_type)
     }
 
     //-----------------ROW MANIPULATION-----------------//
-
     pub(crate) fn init_row(&mut self) -> usize {
         self.current_entity_id += 1;
         self.row_cache[self.current_entity_id - 1] =
@@ -350,17 +353,11 @@ impl ComponentTable {
         self.current_entity_id - 1
     }
 
-    //-----------------QUERY OPERATION-----------------//
-
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Result<AccessRow, &'static str> {
         if entity_index > self.current_entity_id {
             return Err("index overflow");
         }
         Ok(self.row_cache[entity_index].clone())
-    }
-
-    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
-        Ok(self.try_access(comp_type)?.yield_column_access())
     }
 
     //-----------------CELL MANIPULATION-----------------//
