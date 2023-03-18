@@ -11,25 +11,38 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TableCellAccess {
-    // pub(crate) assigned_index: usize,
+pub(crate) struct Location {
     pub(crate) entity_index: usize,
     pub(crate) column_type: CompType,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TableCellAccess {
+    // pub(crate) assigned_index: usize,
+    pub(crate) location: Location,
     pub(crate) access: *mut u8,
     pub(crate) generation: usize,
 }
 impl TableCellAccess {
-    pub(crate) fn new(entity_id: usize, ty: CompType, access: *mut u8) -> Self {
+    pub(crate) fn new(
+        entity_index: usize,
+        column_type: CompType,
+        access: *mut u8,
+        generation: usize,
+    ) -> Self {
         Self {
-            entity_index: entity_id,
-            column_type: ty,
+            location: Location {
+                entity_index,
+                column_type,
+            },
             access,
-            // TODO
-            generation: 0,
+            generation,
         }
     }
-    pub fn yield_entity_index(&self) -> usize {
-        self.entity_index
+    pub(crate) fn entity_index(&self) -> usize {
+        self.location.entity_index
+    }
+    pub(crate) fn column_type(&self) -> CompType {
+        self.location.column_type
     }
 }
 
@@ -71,7 +84,7 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 // all with the same id and and must have diff types
 #[derive(Clone)]
 pub struct AccessRow {
-    // not ordered; MAYBE: turn it into a hash map
+    // not ordered; CONSIDER: turn it into a hash map
     pub(crate) access_vec: Vec<TableCellAccess>,
     pub(crate) entity_index: usize,
 }
@@ -97,7 +110,7 @@ impl AccessRow {
         let mut counter: usize = 0;
         let mut final_index: usize = 0;
         for (index, access) in self.into_iter().enumerate() {
-            if access.column_type == comp_type {
+            if access.column_type() == comp_type {
                 counter += 1;
                 final_index = index;
             }
@@ -150,7 +163,7 @@ pub struct CompType {
     pub(crate) layout: Layout,
 }
 impl CompType {
-    pub(crate) fn new<C: Component>() -> Self {
+    pub(crate) fn new<C: 'static + Sized>() -> Self {
         Self {
             type_id: TypeId::of::<C>(),
             layout: Layout::new::<C>(),
@@ -176,6 +189,7 @@ pub(crate) struct TypeErasedColumn {
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
+    //-----------------HELPERS-----------------//
     /// must ensure this ptr is valid first
     fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
         unsafe {
@@ -196,6 +210,8 @@ impl TypeErasedColumn {
         }
     }
 
+    //-----------------OPERATIONS-----------------//
+    // todo return type should be changed
     pub(crate) fn yield_column_access(&self) -> AccessColumn {
         let mut result_vec = AccessColumn::new_empty(self.comp_type);
         for val in self.sparse.iter() {
@@ -204,6 +220,8 @@ impl TypeErasedColumn {
                     *current_id,
                     self.comp_type,
                     self.is_valid_raw(*current_id).unwrap(),
+                    // todo generation
+                    0,
                 ));
             } else {
                 continue;
@@ -276,6 +294,7 @@ impl TypeErasedColumn {
         Ok(self.get_dense_ptr(dense_index))
     }
 
+    // todo should move the last one of the dense vec to the spot now empty, and remap the sparse thing
     pub(crate) fn remove(&mut self, entity_id: usize) -> Result<Vec<u8>, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
         self.sparse[entity_id] = None;
@@ -322,7 +341,8 @@ impl TypeErasedColumn {
 pub struct ComponentTable {
     table: HashMap<CompType, TypeErasedColumn>,
     // all valid cells in this row; indexed by entity index
-    row_cache: Vec<AccessRow>,
+    row_type_cache: HashMap<usize, TypeErasedColumn>,
+    generation_map: HashMap<Location, usize>,
     current_entity_id: usize,
 }
 
@@ -334,7 +354,8 @@ impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             table: HashMap::new(),
-            row_cache: vec![],
+            row_type_cache: HashMap::new(),
+            generation_map: HashMap::new(),
             current_entity_id: 0,
         }
     }
@@ -360,19 +381,21 @@ impl ComponentTable {
     //-----------------ROW MANIPULATION-----------------//
     pub(crate) fn init_row(&mut self) -> usize {
         self.current_entity_id += 1;
-        self.row_cache[self.current_entity_id - 1] =
-            AccessRow::new_empty(self.current_entity_id - 1);
+        self.row_type_cache.insert(
+            self.current_entity_id - 1,
+            // ???
+            TypeErasedColumn::new(CompType::new::<CompType>(), 64),
+        );
         self.current_entity_id - 1
     }
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Result<AccessRow, &'static str> {
+        // todo assemble the access vector with entity_index, comp types from cache and generation from generation map
         if entity_index > self.current_entity_id {
             return Err("index overflow");
         }
-        Ok(self.row_cache[entity_index].clone())
+        todo!()
     }
-
-    //-----------------ROW CACHE HELPERS-----------------//
 
     //-----------------CELL MANIPULATION HELPERS-----------------//
     fn try_column(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
@@ -398,6 +421,26 @@ impl ComponentTable {
         Ok(self.try_column(comp_type)?.is_valid_raw(entity_index)?)
     }
 
+    //-----------------ROW CACHE HELPERS-----------------//
+    fn try_row_cache(
+        &mut self,
+        entity_index: usize,
+        // todo the ok type should be changed
+    ) -> Result<&mut TypeErasedColumn, &'static str> {
+        self.row_type_cache
+            .get_mut(&entity_index)
+            .ok_or("row doesn't exist")
+    }
+
+    /// on the caller to ensure that this row doesn't already contain a comp_type that's the same
+    unsafe fn add_row_cache(
+        &mut self,
+        entity_index: usize,
+        comp_type: CompType,
+    ) -> Result<(), &'static str> {
+        todo!()
+    }
+
     //-----------------CELL IO OPERATION-----------------//
 
     // if not column init, init it automatically
@@ -408,21 +451,29 @@ impl ComponentTable {
         ptr: *mut u8,
     ) -> Result<TableCellAccess, &'static str> {
         let ptr = self.ensure_column(comp_type).add(ptr, dst_entity_index)?;
-        Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr))
+        unsafe {
+            self.add_row_cache(dst_entity_index, comp_type)?;
+        }
+        // todo generation
+        Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr, 0))
     }
 
     pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Vec<u8>, &'static str> {
-        self.try_column(key.column_type)?.remove(key.entity_index)
+        // todo cache
+        self.try_row_cache(key.entity_index())?;
+        self.try_column(key.column_type())?
+            .remove(key.entity_index())
     }
 
     /// write and return the old one in a series of bytes in a vector
+    /// it is on the caller to ensure they are the same type, else it's UB
     pub(crate) fn replace_cell(
         &mut self,
         key: TableCellAccess,
         ptr: *mut u8,
     ) -> Result<Vec<u8>, &'static str> {
-        let column = self.try_column(key.column_type)?;
-        column.replace(ptr, key.entity_index)
+        let column = self.try_column(key.column_type())?;
+        column.replace(ptr, key.entity_index())
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
@@ -433,11 +484,12 @@ impl ComponentTable {
         from_key: TableCellAccess,
         to_index: usize,
     ) -> Result<TableCellAccess, &'static str> {
-        if self.is_valid_raw(to_index, from_key.column_type).is_err() {
+        if self.is_valid_raw(to_index, from_key.column_type()).is_err() {
             let ptr = self
-                .try_column(from_key.column_type)?
+                .try_column(from_key.column_type())?
                 .add(from_key.access, to_index)?;
-            let new_access = TableCellAccess::new(to_index, from_key.column_type, ptr);
+            // todo
+            let new_access = TableCellAccess::new(to_index, from_key.column_type(), ptr, 0);
             Ok(new_access)
         } else {
             Err("dst isn't empty")
@@ -450,12 +502,12 @@ impl ComponentTable {
         from_key: TableCellAccess,
         to_key: TableCellAccess,
     ) -> Result<Vec<u8>, &'static str> {
-        if from_key.column_type != to_key.column_type {
+        if from_key.column_type() != to_key.column_type() {
             return Err("not on the same column");
         }
-        let column = self.try_column(from_key.column_type)?;
-        let ptr = column.is_valid_raw(from_key.entity_index)?;
-        let vec = column.replace(ptr, to_key.entity_index);
+        let column = self.try_column(from_key.column_type())?;
+        let ptr = column.is_valid_raw(from_key.entity_index())?;
+        let vec = column.replace(ptr, to_key.entity_index());
         vec
     }
 
@@ -465,11 +517,11 @@ impl ComponentTable {
         key1: TableCellAccess,
         key2: TableCellAccess,
     ) -> Result<(), &'static str> {
-        if key1.column_type != key2.column_type {
+        if key1.column_type() != key2.column_type() {
             return Err("not on the same column");
         }
-        self.try_column(key1.column_type)?
-            .swap(key1.entity_index, key2.entity_index)
+        self.try_column(key1.column_type())?
+            .swap(key1.entity_index(), key2.entity_index())
     }
 }
 
@@ -490,7 +542,7 @@ impl<FilterComp: Component> With<FilterComp> {
     ) -> AccessColumn {
         vec.0.retain(|x| {
             if table
-                .get_row(x.entity_index)
+                .get_row(x.entity_index())
                 .unwrap()
                 .get_access_from_type(FilterComp::comp_type())
                 .is_ok()
@@ -511,7 +563,7 @@ impl<FilterComp: Component> Without<FilterComp> {
     ) -> AccessColumn {
         vec.0.retain(|x| {
             if table
-                .get_row(x.entity_index)
+                .get_row(x.entity_index())
                 .unwrap()
                 .get_access_from_type(FilterComp::comp_type())
                 .is_ok()
@@ -572,15 +624,15 @@ impl<'a> Command<'a> {
     ) -> Result<TableCellAccess, &'static str> {
         let comp_type = C::comp_type();
         // making sure they are different types
-        if key.column_type == comp_type {
-            return Err("type == type of access");
+        if key.column_type() == comp_type {
+            return Err("type not matching");
         }
-        let row = self.table.get_row(key.entity_index)?;
+        let row = self.table.get_row(key.entity_index())?;
         if row.get_access_from_type(comp_type).is_ok() {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
-                key.entity_index,
+                key.entity_index(),
                 comp_type,
                 (&mut component as *mut C).cast::<u8>(),
             )?;
@@ -592,7 +644,7 @@ impl<'a> Command<'a> {
         &mut self,
         key: TableCellAccess,
     ) -> Result<C, &'static str> {
-        if key.column_type != C::comp_type() {
+        if key.column_type() != C::comp_type() {
             return Err("type not matching");
         }
         let vec = self.table.pop_cell(key)?;
