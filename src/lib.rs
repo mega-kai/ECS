@@ -341,6 +341,8 @@ impl ComponentTable {
         self.table.remove(&comp_type)
     }
 
+    //-----------------ROW MANIPULATION-----------------//
+
     pub(crate) fn init_row(&mut self) -> usize {
         self.current_entity_id += 1;
         self.row_cache[self.current_entity_id - 1] =
