@@ -269,40 +269,24 @@ impl TypeErasedColumn {
         }
     }
 
-    // todo: return vec u8
     pub(crate) fn remove(&mut self, entity_id: usize) -> Result<Vec<u8>, &'static str> {
-        if entity_id >= self.sparse.len() {
-            Err("index overflow")
-        } else {
-            if let Some(dense_index) = self.sparse[entity_id] {
-                self.sparse[entity_id] = None;
-                let src_ptr = self.get_dense_ptr(dense_index);
-                let mut vec: Vec<u8> = vec![];
-                unsafe {
-                    std::ptr::copy(src_ptr, vec.as_mut_ptr(), self.comp_type.layout.size());
-                }
-                Ok(vec)
-            } else {
-                return Err("trying to remove empty cell");
-            }
+        let dense_index = self.get_dense_index(entity_id)?;
+        self.sparse[entity_id] = None;
+        let src_ptr = self.get_dense_ptr(dense_index);
+        let mut vec: Vec<u8> = vec![];
+        unsafe {
+            std::ptr::copy(src_ptr, vec.as_mut_ptr(), self.comp_type.layout.size());
         }
+        Ok(vec)
     }
 
     // "shallow swap"
     pub(crate) fn swap(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
-        if index1 >= self.sparse.len() || index2 >= self.sparse.len() {
-            Err("index overflow")
-        } else {
-            let dense_index1 = self.sparse[index1];
-            let dense_index2 = self.sparse[index2];
-            if dense_index1.is_none() || dense_index2.is_none() {
-                Err("index invalid")
-            } else {
-                self.sparse[index1] = dense_index2;
-                self.sparse[index2] = dense_index1;
-                Ok(())
-            }
-        }
+        let dense_index1 = self.get_dense_index(index1)?;
+        let dense_index2 = self.get_dense_index(index2)?;
+        self.sparse[index1] = Some(dense_index2);
+        self.sparse[index2] = Some(dense_index1);
+        Ok(())
     }
 
     fn double_dense_cap(&mut self) {
