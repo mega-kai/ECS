@@ -176,7 +176,7 @@ impl TypeErasedColumn {
             if let Some(dense_index) = self.sparse[sparse_index] {
                 Ok(dense_index)
             } else {
-                Err("empty sparse index")
+                Err("empty sparse index/no such row")
             }
         }
     }
@@ -326,7 +326,7 @@ impl ComponentTable {
 
     //-----------------COLUMN MANIPULATION-----------------//
     pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
-        if self.try_access(comp_type).is_ok() {
+        if self.try_column(comp_type).is_ok() {
             panic!("type cannot be init twice")
         }
         self.table
@@ -335,7 +335,7 @@ impl ComponentTable {
     }
 
     pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
-        Ok(self.try_access(comp_type)?.yield_column_access())
+        Ok(self.try_column(comp_type)?.yield_column_access())
     }
 
     pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<TypeErasedColumn> {
@@ -358,28 +358,27 @@ impl ComponentTable {
     }
 
     //-----------------CELL MANIPULATION HELPERS-----------------//
-    fn try_access(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
+    fn try_column(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
         } else {
-            Err("no such type")
+            Err("no such type/column")
         }
     }
 
-    fn ensure_access(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
+    fn ensure_column(&mut self, comp_type: CompType) -> &mut TypeErasedColumn {
         self.table
             .entry(comp_type)
             .or_insert(TypeErasedColumn::new(comp_type, 64))
     }
 
-    // not checking generational index
-    pub(crate) fn read_cell_unchecked(
+    /// bypassing generational index; if empty, returns err, else returns raw ptr
+    pub(crate) fn is_empty_raw(
         &mut self,
         entity_index: usize,
         comp_type: CompType,
-    ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self.try_access(comp_type)?.get(entity_index)?;
-        Ok(TableCellAccess::new(entity_index, comp_type, ptr))
+    ) -> Result<*mut u8, &'static str> {
+        Ok(self.try_column(comp_type)?.get(entity_index)?)
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -391,12 +390,12 @@ impl ComponentTable {
         comp_type: CompType,
         ptr: *mut u8,
     ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self.ensure_access(comp_type).add(ptr, dst_entity_index)?;
+        let ptr = self.ensure_column(comp_type).add(ptr, dst_entity_index)?;
         Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr))
     }
 
     pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Vec<u8>, &'static str> {
-        self.try_access(key.column_type)?.remove(key.entity_index)
+        self.try_column(key.column_type)?.remove(key.entity_index)
     }
 
     /// write and return the old one in a series of bytes in a vector
@@ -405,11 +404,20 @@ impl ComponentTable {
         key: TableCellAccess,
         ptr: *mut u8,
     ) -> Result<Vec<u8>, &'static str> {
-        let access = self.try_access(key.column_type)?;
-        access.replace(ptr, key.entity_index)
+        let column = self.try_column(key.column_type)?;
+        column.replace(ptr, key.entity_index)
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
+
+    /// one valid cell move to an empty one
+    pub(crate) fn move_cell_within(
+        &mut self,
+        from_key: TableCellAccess,
+        to_index: usize,
+    ) -> Result<Vec<u8>, &'static str> {
+        todo!()
+    }
     /// two valid cells, move one to another location, and pop that location
     pub(crate) fn replace_cell_within(
         &mut self,
@@ -419,9 +427,9 @@ impl ComponentTable {
         if from_key.column_type != to_key.column_type {
             return Err("not on the same column");
         }
-        let access = self.try_access(from_key.column_type)?;
-        let ptr = access.get(from_key.entity_index)?;
-        let vec = access.replace(ptr, to_key.entity_index);
+        let column = self.try_column(from_key.column_type)?;
+        let ptr = column.get(from_key.entity_index)?;
+        let vec = column.replace(ptr, to_key.entity_index);
         vec
     }
 
@@ -434,7 +442,7 @@ impl ComponentTable {
         if key1.column_type != key2.column_type {
             return Err("not on the same column");
         }
-        self.try_access(key1.column_type)?
+        self.try_column(key1.column_type)?
             .swap(key1.entity_index, key2.entity_index)
     }
 }
