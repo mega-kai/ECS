@@ -86,22 +86,22 @@ impl AccessRow {
         }
     }
 
-    pub(crate) fn contains(&self, comp_type: CompType, exclude_index: Option<usize>) -> bool {
-        if let Some(index) = exclude_index {
-            for access in self {
-                if access.column_type == comp_type && access.entity_index != index {
-                    return true;
-                }
+    pub(crate) fn contains(&self, comp_type: CompType) -> bool {
+        let mut counter: usize = 0;
+        for access in self {
+            if access.column_type == comp_type {
+                counter += 1;
             }
-            false
-        } else {
-            for access in self {
-                if access.column_type == comp_type {
-                    return true;
-                }
-            }
-            false
         }
+        match counter {
+            0 => false,
+            1 => true,
+            _ => panic!("contains more than one of a same type"),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.access_vec.is_empty()
     }
 }
 impl<'a> IntoIterator for &'a AccessRow {
@@ -361,7 +361,6 @@ impl ComponentTable {
     }
 
     //-----------------CELL MANIPULATION-----------------//
-
     fn try_access(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
@@ -460,7 +459,7 @@ impl<FilterComp: Component> With<FilterComp> {
             if table
                 .get_row(x.entity_index)
                 .unwrap()
-                .contains(FilterComp::comp_type(), Some(x.entity_index))
+                .contains(FilterComp::comp_type())
             {
                 return true;
             }
@@ -480,7 +479,7 @@ impl<FilterComp: Component> Without<FilterComp> {
             if table
                 .get_row(x.entity_index)
                 .unwrap()
-                .contains(FilterComp::comp_type(), Some(x.entity_index))
+                .contains(FilterComp::comp_type())
             {
                 return false;
             }
@@ -541,7 +540,7 @@ impl<'a> Command<'a> {
             return Err("type == type of access");
         }
         let row = self.table.get_row(key.entity_index)?;
-        if row.contains(comp_type, None) {
+        if row.contains(comp_type) {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
