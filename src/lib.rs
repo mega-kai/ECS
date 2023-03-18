@@ -543,6 +543,7 @@ impl Filter for () {
 pub struct Command<'a> {
     table: &'a mut ComponentTable,
 }
+// TODO: turns the api into wrapper functions of those in impl ComponentTable
 impl<'a> Command<'a> {
     pub(crate) fn new(table: &'a mut ComponentTable) -> Self {
         Self { table }
