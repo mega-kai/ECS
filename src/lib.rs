@@ -11,12 +11,6 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Location {
-    pub(crate) entity_index: usize,
-    pub(crate) column_type: CompType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
     // pub(crate) assigned_index: usize,
     pub(crate) entity_index: usize,
