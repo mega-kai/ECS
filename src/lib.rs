@@ -490,6 +490,7 @@ impl<FilterComp: Component> With<FilterComp> {
                 .get_row(x.entity_index)
                 .unwrap()
                 .get_access_from_type(FilterComp::comp_type())
+                .is_ok()
             {
                 return true;
             }
@@ -510,6 +511,7 @@ impl<FilterComp: Component> Without<FilterComp> {
                 .get_row(x.entity_index)
                 .unwrap()
                 .get_access_from_type(FilterComp::comp_type())
+                .is_ok()
             {
                 return false;
             }
