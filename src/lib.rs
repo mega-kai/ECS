@@ -177,22 +177,6 @@ impl TypeErasedColumn {
         result_vec
     }
 
-    pub(crate) fn swap(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
-        if index1 >= self.sparse.len() || index2 >= self.sparse.len() {
-            Err("index overflow")
-        } else {
-            let dense_index1 = self.sparse[index1];
-            let dense_index2 = self.sparse[index2];
-            if dense_index1.is_none() || dense_index2.is_none() {
-                Err("index invalid")
-            } else {
-                self.sparse[index1] = dense_index2;
-                self.sparse[index2] = dense_index1;
-                Ok(())
-            }
-        }
-    }
-
     pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
         assert!(comp_type.layout.size() != 0, "type is a ZST",);
 
@@ -275,6 +259,22 @@ impl TypeErasedColumn {
                 })
             } else {
                 return Err("trying to remove empty cell");
+            }
+        }
+    }
+
+    pub(crate) fn swap(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
+        if index1 >= self.sparse.len() || index2 >= self.sparse.len() {
+            Err("index overflow")
+        } else {
+            let dense_index1 = self.sparse[index1];
+            let dense_index2 = self.sparse[index2];
+            if dense_index1.is_none() || dense_index2.is_none() {
+                Err("index invalid")
+            } else {
+                self.sparse[index1] = dense_index2;
+                self.sparse[index2] = dense_index1;
+                Ok(())
             }
         }
     }
@@ -384,7 +384,8 @@ impl ComponentTable {
         Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr))
     }
 
-    pub(crate) fn read_cell(
+    // not checking generational index
+    pub(crate) fn read_cell_unchecked(
         &mut self,
         entity_index: usize,
         comp_type: CompType,
