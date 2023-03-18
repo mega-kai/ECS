@@ -22,6 +22,7 @@ pub struct TableCellAccess {
     pub(crate) entity_index: usize,
     pub(crate) column_type: CompType,
     pub(crate) access: *mut u8,
+    pub(crate) generation: usize,
 }
 impl TableCellAccess {
     pub(crate) fn new(entity_id: usize, ty: CompType, access: *mut u8) -> Self {
@@ -29,6 +30,8 @@ impl TableCellAccess {
             entity_index: entity_id,
             column_type: ty,
             access,
+            // TODO
+            generation: 0,
         }
     }
     pub fn yield_entity_index(&self) -> usize {
@@ -136,7 +139,6 @@ impl<'a> IntoIterator for &'a mut AccessRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompType {
-    // for debugging
     pub(crate) type_id: TypeId,
     pub(crate) layout: Layout,
 }
@@ -317,10 +319,10 @@ pub struct ComponentTable {
     current_entity_id: usize,
 }
 
+// TODO: generational indices
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
-// TODO: generational indices
 impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
