@@ -67,14 +67,23 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 
 // all with the same id and and must have diff types
 #[derive(Clone)]
-pub struct AccessRow(pub(crate) Vec<TableCellAccess>, pub(crate) usize);
+pub struct AccessRow {
+    pub(crate) access_vec: Vec<TableCellAccess>,
+    pub(crate) entity_index: usize,
+}
 impl AccessRow {
     pub(crate) fn new(access_vec: Vec<TableCellAccess>, entity_index: usize) -> Self {
-        Self(access_vec, entity_index)
+        Self {
+            access_vec,
+            entity_index,
+        }
     }
 
-    pub(crate) fn new_empty(entity_id: usize) -> Self {
-        Self(vec![], entity_id)
+    pub(crate) fn new_empty(entity_index: usize) -> Self {
+        Self {
+            access_vec: vec![],
+            entity_index,
+        }
     }
 
     pub(crate) fn contains(&self, comp_type: CompType, exclude_index: Option<usize>) -> bool {
@@ -101,7 +110,7 @@ impl<'a> IntoIterator for &'a AccessRow {
     type IntoIter = std::slice::Iter<'a, TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.access_vec.iter()
     }
 }
 impl<'a> IntoIterator for &'a mut AccessRow {
@@ -110,7 +119,7 @@ impl<'a> IntoIterator for &'a mut AccessRow {
     type IntoIter = std::slice::IterMut<'a, TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
+        self.access_vec.iter_mut()
     }
 }
 
@@ -300,6 +309,8 @@ impl TypeErasedColumn {
 
 pub struct ComponentTable {
     table: HashMap<CompType, TypeErasedColumn>,
+    // all valid cells in this row; indexed by entity index
+    row_cache: Vec<AccessRow>,
     current_entity_id: usize,
 }
 
@@ -311,6 +322,7 @@ impl ComponentTable {
     pub(crate) fn new() -> Self {
         Self {
             table: HashMap::new(),
+            row_cache: vec![],
             current_entity_id: 0,
         }
     }
@@ -331,6 +343,8 @@ impl ComponentTable {
 
     pub(crate) fn init_row(&mut self) -> usize {
         self.current_entity_id += 1;
+        self.row_cache[self.current_entity_id - 1] =
+            AccessRow::new_empty(self.current_entity_id - 1);
         self.current_entity_id - 1
     }
 
@@ -340,19 +354,7 @@ impl ComponentTable {
         if entity_index > self.current_entity_id {
             return Err("index overflow");
         }
-        let mut result = AccessRow::new(vec![], entity_index);
-        for (k, v) in &self.table {
-            if let Some(val) = v.get(entity_index) {
-                result.0.push(TableCellAccess::new(entity_index, *k, val));
-            } else {
-                continue;
-            }
-        }
-        if result.0.is_empty() {
-            Err("row is empty")
-        } else {
-            Ok(result)
-        }
+        Ok(self.row_cache[entity_index].clone())
     }
 
     pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
