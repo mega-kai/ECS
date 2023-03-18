@@ -241,7 +241,7 @@ impl TypeErasedSparseSet {
     }
 
     //-----------------HELPERS-----------------//
-    /// must ensure this ptr is valid first
+    /// must ensure dense_index is valid first
     fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
         unsafe {
             self.data_heap_ptr
