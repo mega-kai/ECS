@@ -86,7 +86,7 @@ impl AccessRow {
         }
     }
 
-    pub(crate) fn contains(&self, comp_type: CompType) -> bool {
+    pub(crate) fn contains_type(&self, comp_type: CompType) -> bool {
         let mut counter: usize = 0;
         for access in self {
             if access.column_type == comp_type {
@@ -98,6 +98,11 @@ impl AccessRow {
             1 => true,
             _ => panic!("contains more than one of a same type"),
         }
+    }
+
+    // for generational index
+    pub(crate) fn contains_access(&self, key: TableCellAccess) -> bool {
+        todo!()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -459,7 +464,7 @@ impl<FilterComp: Component> With<FilterComp> {
             if table
                 .get_row(x.entity_index)
                 .unwrap()
-                .contains(FilterComp::comp_type())
+                .contains_type(FilterComp::comp_type())
             {
                 return true;
             }
@@ -479,7 +484,7 @@ impl<FilterComp: Component> Without<FilterComp> {
             if table
                 .get_row(x.entity_index)
                 .unwrap()
-                .contains(FilterComp::comp_type())
+                .contains_type(FilterComp::comp_type())
             {
                 return false;
             }
@@ -540,7 +545,7 @@ impl<'a> Command<'a> {
             return Err("type == type of access");
         }
         let row = self.table.get_row(key.entity_index)?;
-        if row.contains(comp_type) {
+        if row.contains_type(comp_type) {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
