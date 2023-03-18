@@ -391,7 +391,7 @@ impl ComponentTable {
         Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr))
     }
 
-    pub(crate) fn get_cell(
+    pub(crate) fn read_cell(
         &mut self,
         entity_index: usize,
         comp_type: CompType,
@@ -411,7 +411,8 @@ impl ComponentTable {
         self.try_access(comp_type)?.remove(dst_entity_index)
     }
 
-    pub(crate) fn overwrite(
+    // overwritting without reading
+    pub(crate) fn write_cell(
         &mut self,
         comp_type: CompType,
         dst_entity_index: usize,
