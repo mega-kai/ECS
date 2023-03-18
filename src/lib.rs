@@ -179,8 +179,41 @@ pub trait Component: Clone + 'static {
     }
 }
 
+pub(crate) struct CompTypes {
+    pub(crate) types: Vec<CompType>,
+    pub(crate) start_offsets: Vec<usize>,
+    pub(crate) total_layout: Layout,
+}
+impl CompTypes {
+    pub(crate) fn new(mut comp_types: Vec<CompType>) -> Self {
+        // the first sizeof(usize) bytes would always contain the sparse index
+        let mut types = vec![CompType::new::<usize>()];
+        types.append(&mut comp_types);
+        let mut total_layout = Layout::new::<usize>();
+        // the 0th byte is where the sparse index starts
+        let mut start_offsets: Vec<usize> = vec![0];
+        for (index, each) in comp_types.into_iter().enumerate() {
+            if index == 0 {
+                continue;
+            }
+            let (new_layout, start_offset) = total_layout.extend(each.layout).unwrap();
+            start_offsets.push(start_offset);
+            total_layout = new_layout;
+        }
+        Self {
+            types,
+            start_offsets,
+            total_layout,
+        }
+    }
+
+    pub(crate) fn total_layout(&self) -> Layout {
+        self.total_layout
+    }
+}
+
 pub(crate) struct TypeErasedSparseSet {
-    comp_type: CompType,
+    comp_types: CompTypes,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
     pub(crate) len: usize,
@@ -189,13 +222,17 @@ pub(crate) struct TypeErasedSparseSet {
 }
 impl TypeErasedSparseSet {
     /// todo make this column type hold more than one type of data;
-    /// the first sizeof(usize) bytes would always contain the sparse index
-    pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
-        assert!(comp_type.layout.size() != 0, "type is a ZST",);
+    pub(crate) fn new(comp_types: Vec<CompType>, size: usize) -> Self {
+        for ty in comp_types {
+            assert!(ty.layout.size() != 0, "type contains a ZST",);
+        }
 
-        let data_heap_ptr = unsafe { std::alloc::alloc(comp_type.layout.repeat(size).unwrap().0) };
+        let result_comp_types = CompTypes::new(comp_types);
+
+        let data_heap_ptr =
+            unsafe { std::alloc::alloc(result_comp_types.total_layout().repeat(size).unwrap().0) };
         Self {
-            comp_type,
+            comp_types: result_comp_types,
             data_heap_ptr,
             capacity: size,
             len: 0,
@@ -208,7 +245,7 @@ impl TypeErasedSparseSet {
     fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
         unsafe {
             self.data_heap_ptr
-                .add(self.comp_type.layout.size() * dense_index)
+                .add(self.comp_types.layout.size() * dense_index)
         }
     }
 
@@ -236,12 +273,12 @@ impl TypeErasedSparseSet {
 
     // todo return type should be changed
     pub(crate) fn get_all(&self) -> AccessColumn {
-        let mut result_vec = AccessColumn::new_empty(self.comp_type);
+        let mut result_vec = AccessColumn::new_empty(self.comp_types);
         for val in self.sparse.iter() {
             if let Some(current_id) = val {
                 result_vec.0.push(TableCellAccess::new(
                     *current_id,
-                    self.comp_type,
+                    self.comp_types,
                     self.get(*current_id).unwrap(),
                     // todo generation
                     0,
@@ -272,7 +309,7 @@ impl TypeErasedSparseSet {
 
         unsafe {
             let raw_dst_ptr = self.get_dense_ptr(self.len);
-            std::ptr::copy(ptr, raw_dst_ptr, self.comp_type.layout.size());
+            std::ptr::copy(ptr, raw_dst_ptr, self.comp_types.layout.size());
             self.len += 1;
             Ok(raw_dst_ptr)
         }
@@ -284,17 +321,17 @@ impl TypeErasedSparseSet {
         dst_entity_index: usize,
     ) -> Result<Vec<u8>, &'static str> {
         let dense_index = self.get_dense_index(dst_entity_index)?;
-        let mut vec: Vec<u8> = vec![0; self.comp_type.layout.size()];
+        let mut vec: Vec<u8> = vec![0; self.comp_types.layout.size()];
         unsafe {
             std::ptr::copy(
                 self.get_dense_ptr(dense_index),
                 vec.as_mut_ptr(),
-                self.comp_type.layout.size(),
+                self.comp_types.layout.size(),
             );
             std::ptr::copy(
                 src_ptr,
                 self.get_dense_ptr(dense_index),
-                self.comp_type.layout.size(),
+                self.comp_types.layout.size(),
             );
         }
         Ok(vec)
@@ -309,7 +346,7 @@ impl TypeErasedSparseSet {
             std::ptr::copy(
                 src_ptr,
                 result_vec.as_mut_ptr(),
-                self.comp_type.layout.size(),
+                self.comp_types.layout.size(),
             );
         }
         // todo in order to be able to index the item in sparse vec and remap it, the dense vec must first hold that sparse index
@@ -329,14 +366,14 @@ impl TypeErasedSparseSet {
     fn double_dense_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
-            .comp_type
+            .comp_types
             .layout
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = unsafe {
             std::alloc::realloc(
                 self.data_heap_ptr,
-                self.comp_type
+                self.comp_types
                     .layout
                     .repeat(self.capacity)
                     .expect("could not repeat layout")
