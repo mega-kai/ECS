@@ -118,7 +118,10 @@ impl AccessRow {
         self.access_vec.is_empty()
     }
 
-    pub(crate) fn get_generation(&self, comp_type: CompType) -> Result<usize, &'static str> {
+    pub(crate) fn get_current_generation(
+        &self,
+        comp_type: CompType,
+    ) -> Result<usize, &'static str> {
         Ok(self.get_access_from_type(comp_type)?.generation)
     }
 }
