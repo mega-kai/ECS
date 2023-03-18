@@ -417,7 +417,15 @@ impl ComponentTable {
         from_key: TableCellAccess,
         to_index: usize,
     ) -> Result<TableCellAccess, &'static str> {
-        todo!()
+        if self.is_valid_raw(to_index, from_key.column_type).is_err() {
+            let ptr = self
+                .try_column(from_key.column_type)?
+                .add(from_key.access, to_index)?;
+            let new_access = TableCellAccess::new(to_index, from_key.column_type, ptr);
+            Ok(new_access)
+        } else {
+            Err("dst isn't empty")
+        }
     }
 
     /// two valid cells, move one to another location, and pop that location
