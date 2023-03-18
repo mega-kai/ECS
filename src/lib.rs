@@ -161,7 +161,7 @@ pub(crate) struct TypeErasedColumn {
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
-    // must ensure this ptr is valid first
+    /// must ensure this ptr is valid first
     fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
         unsafe {
             self.data_heap_ptr
@@ -199,7 +199,7 @@ impl TypeErasedColumn {
     }
 
     pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) -> Result<*mut u8, &'static str> {
-        if self.get(entity_id).is_some() {
+        if self.get(entity_id).is_ok() {
             return Err("cell taken");
         }
 
@@ -245,18 +245,19 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn get(&self, entity_id: usize) -> Option<*mut u8> {
+    pub(crate) fn get(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
         if entity_id >= self.sparse.len() {
-            None
+            Err("index overflow")
         } else {
             if let Some(dense_index) = self.sparse[entity_id] {
-                Some(self.get_dense_ptr(dense_index))
+                Ok(self.get_dense_ptr(dense_index))
             } else {
-                None
+                Err("empty sparse index")
             }
         }
     }
 
+    // todo: return vec u8
     pub(crate) fn remove(&mut self, entity_id: usize) -> Result<*mut u8, &'static str> {
         if entity_id >= self.sparse.len() {
             Err("index overflow")
@@ -398,10 +399,7 @@ impl ComponentTable {
         entity_index: usize,
         comp_type: CompType,
     ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self
-            .try_access(comp_type)?
-            .get(entity_index)
-            .ok_or("invalid index")?;
+        let ptr = self.try_access(comp_type)?.get(entity_index)?;
         Ok(TableCellAccess::new(entity_index, comp_type, ptr))
     }
 
@@ -409,7 +407,7 @@ impl ComponentTable {
         self.try_access(key.column_type)?.remove(key.entity_index)
     }
 
-    // write and return the old one in a series of bytes
+    /// write and return the old one in a series of bytes in a vector
     pub(crate) fn replace_cell(
         &mut self,
         key: TableCellAccess,
@@ -420,18 +418,20 @@ impl ComponentTable {
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
-    // two valid cells, move one to another location, and pop that location
+    /// two valid cells, move one to another location, and pop that location
     pub(crate) fn replace_cell_within(
         &mut self,
         comp_type: CompType,
         from_index: usize,
         to_index: usize,
-    ) -> Result<*mut u8, &'static str> {
+    ) -> Result<Vec<u8>, &'static str> {
         let access = self.try_access(comp_type)?;
-        todo!()
+        let ptr = access.get(from_index)?;
+        let vec = access.replace(ptr, to_index);
+        vec
     }
 
-    // two valid cells
+    /// shallow swap between two valid cells
     pub(crate) fn swap_cell_within(
         &mut self,
         comp_type: CompType,
