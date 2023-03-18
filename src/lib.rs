@@ -572,7 +572,7 @@ impl<'a> Command<'a> {
             return Err("type == type of access");
         }
         let row = self.table.get_row(key.entity_index)?;
-        if row.get_access_from_type(comp_type) {
+        if row.get_access_from_type(comp_type).is_ok() {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
