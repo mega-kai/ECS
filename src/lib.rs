@@ -238,35 +238,21 @@ impl TypeErasedColumn {
         src_ptr: *mut u8,
         entity_id: usize,
     ) -> Result<Vec<u8>, &'static str> {
-        if entity_id >= self.sparse.len() {
-            return Err("index overflow");
+        let dense_index = self.get_dense_index(entity_id)?;
+        let mut vec: Vec<u8> = vec![0; self.comp_type.layout.size()];
+        unsafe {
+            std::ptr::copy(
+                self.get_dense_ptr(dense_index),
+                vec.as_mut_ptr(),
+                self.comp_type.layout.size(),
+            );
         }
-        if let Some(dense_index) = self.sparse[entity_id] {
-            // first allocate
-            let mut vec: Vec<u8> = vec![0; self.comp_type.layout.size()];
-            unsafe {
-                std::ptr::copy(
-                    self.get_dense_ptr(dense_index),
-                    vec.as_mut_ptr(),
-                    self.comp_type.layout.size(),
-                );
-            }
-            Ok(vec)
-        } else {
-            Err("trying to overwrite empty cell")
-        }
+        Ok(vec)
     }
 
     pub(crate) fn get(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
-        if entity_id >= self.sparse.len() {
-            Err("index overflow")
-        } else {
-            if let Some(dense_index) = self.sparse[entity_id] {
-                Ok(self.get_dense_ptr(dense_index))
-            } else {
-                Err("empty sparse index")
-            }
-        }
+        let dense_index = self.get_dense_index(entity_id)?;
+        Ok(self.get_dense_ptr(dense_index))
     }
 
     pub(crate) fn remove(&mut self, entity_id: usize) -> Result<Vec<u8>, &'static str> {
