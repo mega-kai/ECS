@@ -369,6 +369,16 @@ impl ComponentTable {
 
     //-----------------CELL IO-----------------//
 
+    // not checking generational index
+    pub(crate) fn read_cell_unchecked(
+        &mut self,
+        entity_index: usize,
+        comp_type: CompType,
+    ) -> Result<TableCellAccess, &'static str> {
+        let ptr = self.try_access(comp_type)?.get(entity_index)?;
+        Ok(TableCellAccess::new(entity_index, comp_type, ptr))
+    }
+
     // if not column init, init it automatically
     pub(crate) fn push_cell(
         &mut self,
@@ -378,16 +388,6 @@ impl ComponentTable {
     ) -> Result<TableCellAccess, &'static str> {
         let ptr = self.ensure_access(comp_type).add(ptr, dst_entity_index)?;
         Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr))
-    }
-
-    // not checking generational index
-    pub(crate) fn read_cell_unchecked(
-        &mut self,
-        entity_index: usize,
-        comp_type: CompType,
-    ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self.try_access(comp_type)?.get(entity_index)?;
-        Ok(TableCellAccess::new(entity_index, comp_type, ptr))
     }
 
     pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Vec<u8>, &'static str> {
