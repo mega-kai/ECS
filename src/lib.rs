@@ -236,14 +236,19 @@ impl TypeErasedColumn {
     pub(crate) fn replace(
         &self,
         src_ptr: *mut u8,
-        entity_id: usize,
+        dst_entity_index: usize,
     ) -> Result<Vec<u8>, &'static str> {
-        let dense_index = self.get_dense_index(entity_id)?;
+        let dense_index = self.get_dense_index(dst_entity_index)?;
         let mut vec: Vec<u8> = vec![0; self.comp_type.layout.size()];
         unsafe {
             std::ptr::copy(
                 self.get_dense_ptr(dense_index),
                 vec.as_mut_ptr(),
+                self.comp_type.layout.size(),
+            );
+            std::ptr::copy(
+                src_ptr,
+                self.get_dense_ptr(dense_index),
                 self.comp_type.layout.size(),
             );
         }
@@ -408,13 +413,15 @@ impl ComponentTable {
     /// two valid cells, move one to another location, and pop that location
     pub(crate) fn replace_cell_within(
         &mut self,
-        comp_type: CompType,
-        from_index: usize,
-        to_index: usize,
+        from_key: TableCellAccess,
+        to_key: TableCellAccess,
     ) -> Result<Vec<u8>, &'static str> {
-        let access = self.try_access(comp_type)?;
-        let ptr = access.get(from_index)?;
-        let vec = access.replace(ptr, to_index);
+        if from_key.column_type != to_key.column_type {
+            return Err("not on the same column");
+        }
+        let access = self.try_access(from_key.column_type)?;
+        let ptr = access.get(from_key.entity_index)?;
+        let vec = access.replace(ptr, to_key.entity_index);
         vec
     }
 
