@@ -169,6 +169,18 @@ impl TypeErasedColumn {
         }
     }
 
+    fn get_dense_index(&self, sparse_index: usize) -> Result<usize, &'static str> {
+        if sparse_index >= self.sparse.len() {
+            Err("index overflow")
+        } else {
+            if let Some(dense_index) = self.sparse[sparse_index] {
+                Ok(dense_index)
+            } else {
+                Err("empty sparse index")
+            }
+        }
+    }
+
     pub(crate) fn yield_column_access(&self) -> AccessColumn {
         let mut result_vec = AccessColumn::new_empty(self.comp_type);
         for val in self.sparse.iter() {
@@ -258,13 +270,18 @@ impl TypeErasedColumn {
     }
 
     // todo: return vec u8
-    pub(crate) fn remove(&mut self, entity_id: usize) -> Result<*mut u8, &'static str> {
+    pub(crate) fn remove(&mut self, entity_id: usize) -> Result<Vec<u8>, &'static str> {
         if entity_id >= self.sparse.len() {
             Err("index overflow")
         } else {
             if let Some(dense_index) = self.sparse[entity_id] {
                 self.sparse[entity_id] = None;
-                Ok(self.get_dense_ptr(dense_index))
+                let src_ptr = self.get_dense_ptr(dense_index);
+                let mut vec: Vec<u8> = vec![];
+                unsafe {
+                    std::ptr::copy(src_ptr, vec.as_mut_ptr(), self.comp_type.layout.size());
+                }
+                Ok(vec)
             } else {
                 return Err("trying to remove empty cell");
             }
@@ -403,7 +420,7 @@ impl ComponentTable {
         Ok(TableCellAccess::new(entity_index, comp_type, ptr))
     }
 
-    pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<*mut u8, &'static str> {
+    pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Vec<u8>, &'static str> {
         self.try_access(key.column_type)?.remove(key.entity_index)
     }
 
@@ -563,8 +580,9 @@ impl<'a> Command<'a> {
             return Err("type not matching");
         }
         let ptr = self.table.pop_cell(key)?;
-        let result = unsafe { ptr.cast::<C>().as_mut().unwrap().clone() };
-        Ok(result)
+        // let result = unsafe { ptr.cast::<C>().as_mut().unwrap().clone() };
+        // Ok(result)
+        todo!()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
