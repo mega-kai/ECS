@@ -231,24 +231,18 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn write(&self, ptr: *mut u8, entity_id: usize) -> Result<*mut u8, &'static str> {
+    pub(crate) fn replace(
+        &self,
+        src_ptr: *mut u8,
+        entity_id: usize,
+    ) -> Result<*mut u8, &'static str> {
         // return final ptr within the column
         if entity_id >= self.sparse.len() {
             return Err("index overflow");
         }
         if let Some(dense_index) = self.sparse[entity_id] {
-            unsafe {
-                std::ptr::copy(
-                    ptr,
-                    self.data_heap_ptr
-                        .add(dense_index * self.comp_type.layout.size()),
-                    self.comp_type.layout.size(),
-                )
-            }
-            Ok(unsafe {
-                self.data_heap_ptr
-                    .add(dense_index * self.comp_type.layout.size())
-            })
+            // probably returning a buffer
+            todo!()
         } else {
             Err("trying to overwrite empty cell")
         }
@@ -379,7 +373,7 @@ impl ComponentTable {
 
     //-----------------CELL IO-----------------//
 
-    // if not column not init, init it automatically
+    // if not column init, init it automatically
     pub(crate) fn push_cell(
         &mut self,
         dst_entity_index: usize,
@@ -402,26 +396,19 @@ impl ComponentTable {
         Ok(TableCellAccess::new(entity_index, comp_type, ptr))
     }
 
-    pub(crate) fn pop_cell(
-        &mut self,
-        dst_entity_index: usize,
-        comp_type: CompType,
-    ) -> Result<*mut u8, &'static str> {
-        self.try_access(comp_type)?.remove(dst_entity_index)
+    pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<*mut u8, &'static str> {
+        self.try_access(key.column_type)?.remove(key.entity_index)
     }
 
-    // overwritting without reading
-    pub(crate) fn write_cell(
+    // write and return the old one
+    pub(crate) fn replace_cell(
         &mut self,
-        comp_type: CompType,
-        dst_entity_index: usize,
+        key: TableCellAccess,
         ptr: *mut u8,
     ) -> Result<*mut u8, &'static str> {
-        let access = self.try_access(comp_type)?;
-        access.write(ptr, dst_entity_index)
+        let access = self.try_access(key.column_type)?;
+        access.replace(ptr, key.entity_index)
     }
-
-    pub(crate) fn swap_cell() {}
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
     // two valid cells, move one to another location, and pop that location
@@ -566,7 +553,7 @@ impl<'a> Command<'a> {
         if key.column_type != C::comp_type() {
             return Err("type not matching");
         }
-        let ptr = self.table.pop_cell(key.entity_index, key.column_type)?;
+        let ptr = self.table.pop_cell(key)?;
         let result = unsafe { ptr.cast::<C>().as_mut().unwrap().clone() };
         Ok(result)
     }
