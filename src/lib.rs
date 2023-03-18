@@ -71,7 +71,7 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 // all with the same id and and must have diff types
 #[derive(Clone)]
 pub struct AccessRow {
-    // not ordered
+    // not ordered; MAYBE: turn it into a hash map
     pub(crate) access_vec: Vec<TableCellAccess>,
     pub(crate) entity_index: usize,
 }
