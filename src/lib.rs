@@ -179,17 +179,19 @@ pub trait Component: Clone + 'static {
     }
 }
 
+pub(crate) struct SparseIndex(usize);
+
 pub(crate) struct CompTypes {
-    pub(crate) types: Vec<CompType>,
-    pub(crate) start_offsets: Vec<usize>,
-    pub(crate) total_layout: Layout,
+    types: Vec<CompType>,
+    start_offsets: Vec<usize>,
+    total_layout: Layout,
 }
 impl CompTypes {
     pub(crate) fn new(mut comp_types: Vec<CompType>) -> Self {
-        // the first sizeof(usize) bytes would always contain the sparse index
-        let mut types = vec![CompType::new::<usize>()];
+        // the first sizeof(SparseIndex) bytes would always contain the sparse index
+        let mut types = vec![CompType::new::<SparseIndex>()];
         types.append(&mut comp_types);
-        let mut total_layout = Layout::new::<usize>();
+        let mut total_layout = Layout::new::<SparseIndex>();
         // the 0th byte is where the sparse index starts
         let mut start_offsets: Vec<usize> = vec![0];
         for (index, each) in comp_types.into_iter().enumerate() {
@@ -209,6 +211,23 @@ impl CompTypes {
 
     pub(crate) fn total_layout(&self) -> Layout {
         self.total_layout
+    }
+
+    fn try_index_from_comptype(&self, comp_type: CompType) -> Result<usize, &'static str> {
+        for (index, ty) in self.types.iter().enumerate() {
+            if comp_type == *ty {
+                return Ok(index);
+            }
+        }
+        Err("type not in this comp types bundle")
+    }
+
+    pub(crate) fn get_layout_and_offset(
+        &self,
+        comp_type: CompType,
+    ) -> Result<(Layout, usize), &'static str> {
+        let index = self.try_index_from_comptype(comp_type)?;
+        Ok((self.types[index].layout, self.start_offsets[index]))
     }
 }
 
@@ -242,10 +261,16 @@ impl TypeErasedSparseSet {
 
     //-----------------HELPERS-----------------//
     /// must ensure dense_index is valid first
-    fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
+    fn get_dense_ptr(
+        &self,
+        dense_index: usize,
+        comp_type: CompType,
+    ) -> Result<*mut u8, &'static str> {
+        let (_, offset) = self.comp_types.get_layout_and_offset(comp_type)?;
         unsafe {
-            self.data_heap_ptr
-                .add(self.comp_types.layout.size() * dense_index)
+            Ok(self
+                .data_heap_ptr
+                .add(self.comp_types.total_layout().size() * (dense_index - 1) + offset))
         }
     }
 
