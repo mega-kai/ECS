@@ -372,8 +372,6 @@ impl ComponentTable {
             .or_insert(TypeErasedColumn::new(comp_type, 64))
     }
 
-    //-----------------CELL IO-----------------//
-
     // not checking generational index
     pub(crate) fn read_cell_unchecked(
         &mut self,
@@ -383,6 +381,8 @@ impl ComponentTable {
         let ptr = self.try_access(comp_type)?.get(entity_index)?;
         Ok(TableCellAccess::new(entity_index, comp_type, ptr))
     }
+
+    //-----------------CELL IO OPERATION-----------------//
 
     // if not column init, init it automatically
     pub(crate) fn push_cell(
@@ -428,12 +428,14 @@ impl ComponentTable {
     /// shallow swap between two valid cells
     pub(crate) fn swap_cell_within(
         &mut self,
-        comp_type: CompType,
-        cell1_entity_index: usize,
-        cell2_entity_index: usize,
+        key1: TableCellAccess,
+        key2: TableCellAccess,
     ) -> Result<(), &'static str> {
-        self.try_access(comp_type)?
-            .swap(cell1_entity_index, cell2_entity_index)
+        if key1.column_type != key2.column_type {
+            return Err("not on the same column");
+        }
+        self.try_access(key1.column_type)?
+            .swap(key1.entity_index, key2.entity_index)
     }
 }
 
