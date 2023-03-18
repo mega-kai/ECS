@@ -411,12 +411,12 @@ impl ComponentTable {
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
 
-    /// one valid cell move to an empty one
+    /// one valid cell move to an empty one, returns the new table cell access
     pub(crate) fn move_cell_within(
         &mut self,
         from_key: TableCellAccess,
         to_index: usize,
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<TableCellAccess, &'static str> {
         todo!()
     }
 
