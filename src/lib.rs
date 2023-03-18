@@ -231,11 +231,7 @@ impl TypeErasedColumn {
         }
     }
 
-    pub(crate) fn overwrite(
-        &self,
-        ptr: *mut u8,
-        entity_id: usize,
-    ) -> Result<*mut u8, &'static str> {
+    pub(crate) fn write(&self, ptr: *mut u8, entity_id: usize) -> Result<*mut u8, &'static str> {
         // return final ptr within the column
         if entity_id >= self.sparse.len() {
             return Err("index overflow");
@@ -419,7 +415,7 @@ impl ComponentTable {
         ptr: *mut u8,
     ) -> Result<*mut u8, &'static str> {
         let access = self.try_access(comp_type)?;
-        access.overwrite(ptr, dst_entity_index)
+        access.write(ptr, dst_entity_index)
     }
 
     // two valid cells, pop one and overwrite the data to another
@@ -431,7 +427,7 @@ impl ComponentTable {
     ) -> Result<*mut u8, &'static str> {
         let access = self.try_access(comp_type)?;
         let ptr = access.remove(from_index)?;
-        access.overwrite(ptr, to_index)
+        access.write(ptr, to_index)
     }
 
     // two valid cells
