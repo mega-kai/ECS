@@ -161,6 +161,14 @@ pub(crate) struct TypeErasedColumn {
     pub(crate) sparse: Vec<Option<usize>>,
 }
 impl TypeErasedColumn {
+    // must ensure this ptr is valid first
+    fn get_dense_ptr(&self, dense_index: usize) -> *mut u8 {
+        unsafe {
+            self.data_heap_ptr
+                .add(self.comp_type.layout.size() * dense_index)
+        }
+    }
+
     pub(crate) fn yield_column_access(&self) -> AccessColumn {
         let mut result_vec = AccessColumn::new_empty(self.comp_type);
         for val in self.sparse.iter() {
@@ -206,9 +214,7 @@ impl TypeErasedColumn {
         self.sparse[entity_id] = Some(self.len);
 
         unsafe {
-            let raw_dst_ptr = self
-                .data_heap_ptr
-                .add(self.len * self.comp_type.layout.size());
+            let raw_dst_ptr = self.get_dense_ptr(self.len);
             std::ptr::copy(ptr, raw_dst_ptr, self.comp_type.layout.size());
             self.len += 1;
             Ok(raw_dst_ptr)
@@ -219,7 +225,7 @@ impl TypeErasedColumn {
         &self,
         src_ptr: *mut u8,
         entity_id: usize,
-    ) -> Result<*mut u8, &'static str> {
+    ) -> Result<Vec<u8>, &'static str> {
         // return final ptr within the column
         if entity_id >= self.sparse.len() {
             return Err("index overflow");
@@ -237,10 +243,7 @@ impl TypeErasedColumn {
             None
         } else {
             if let Some(dense_index) = self.sparse[entity_id] {
-                Some(unsafe {
-                    self.data_heap_ptr
-                        .add(dense_index * self.comp_type.layout.size())
-                })
+                Some(self.get_dense_ptr(dense_index))
             } else {
                 None
             }
@@ -253,10 +256,7 @@ impl TypeErasedColumn {
         } else {
             if let Some(dense_index) = self.sparse[entity_id] {
                 self.sparse[entity_id] = None;
-                Ok(unsafe {
-                    self.data_heap_ptr
-                        .add(dense_index * self.comp_type.layout.size())
-                })
+                Ok(self.get_dense_ptr(dense_index))
             } else {
                 return Err("trying to remove empty cell");
             }
@@ -401,12 +401,12 @@ impl ComponentTable {
         self.try_access(key.column_type)?.remove(key.entity_index)
     }
 
-    // write and return the old one
+    // write and return the old one in a series of bytes
     pub(crate) fn replace_cell(
         &mut self,
         key: TableCellAccess,
         ptr: *mut u8,
-    ) -> Result<*mut u8, &'static str> {
+    ) -> Result<Vec<u8>, &'static str> {
         let access = self.try_access(key.column_type)?;
         access.replace(ptr, key.entity_index)
     }
