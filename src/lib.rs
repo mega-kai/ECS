@@ -71,6 +71,7 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 // all with the same id and and must have diff types
 #[derive(Clone)]
 pub struct AccessRow {
+    // not ordered
     pub(crate) access_vec: Vec<TableCellAccess>,
     pub(crate) entity_index: usize,
 }
@@ -89,17 +90,22 @@ impl AccessRow {
         }
     }
 
-    pub(crate) fn contains_type(&self, comp_type: CompType) -> bool {
+    pub(crate) fn get_access_from_type(
+        &self,
+        comp_type: CompType,
+    ) -> Result<TableCellAccess, &'static str> {
         let mut counter: usize = 0;
-        for access in self {
+        let mut final_index: usize = 0;
+        for (index, access) in self.into_iter().enumerate() {
             if access.column_type == comp_type {
                 counter += 1;
+                final_index = index;
             }
         }
         match counter {
-            0 => false,
-            1 => true,
-            _ => panic!("contains more than one of a same type"),
+            0 => Err("zero of this type in this row"),
+            1 => Ok(self.access_vec[final_index].clone()),
+            _ => Err("more than one of this type in this row"),
         }
     }
 
@@ -110,6 +116,10 @@ impl AccessRow {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.access_vec.is_empty()
+    }
+
+    pub(crate) fn get_generation(&self, comp_type: CompType) -> Result<usize, &'static str> {
+        Ok(self.get_access_from_type(comp_type)?.generation)
     }
 }
 impl<'a> IntoIterator for &'a AccessRow {
@@ -479,7 +489,7 @@ impl<FilterComp: Component> With<FilterComp> {
             if table
                 .get_row(x.entity_index)
                 .unwrap()
-                .contains_type(FilterComp::comp_type())
+                .get_access_from_type(FilterComp::comp_type())
             {
                 return true;
             }
@@ -499,7 +509,7 @@ impl<FilterComp: Component> Without<FilterComp> {
             if table
                 .get_row(x.entity_index)
                 .unwrap()
-                .contains_type(FilterComp::comp_type())
+                .get_access_from_type(FilterComp::comp_type())
             {
                 return false;
             }
@@ -560,7 +570,7 @@ impl<'a> Command<'a> {
             return Err("type == type of access");
         }
         let row = self.table.get_row(key.entity_index)?;
-        if row.contains_type(comp_type) {
+        if row.get_access_from_type(comp_type) {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
