@@ -316,6 +316,7 @@ pub struct ComponentTable {
 }
 
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
+// TODO: turning the input/output entirely on tablecell access
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
 // TODO: generational indices
@@ -361,7 +362,7 @@ impl ComponentTable {
         Ok(self.row_cache[entity_index].clone())
     }
 
-    //-----------------CELL MANIPULATION-----------------//
+    //-----------------CELL MANIPULATION HELPERS-----------------//
     fn try_access(&mut self, comp_type: CompType) -> Result<&mut TypeErasedColumn, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
@@ -375,6 +376,8 @@ impl ComponentTable {
             .entry(comp_type)
             .or_insert(TypeErasedColumn::new(comp_type, 64))
     }
+
+    //-----------------CELL IO-----------------//
 
     // if not column not init, init it automatically
     pub(crate) fn push_cell(
@@ -418,20 +421,22 @@ impl ComponentTable {
         access.write(ptr, dst_entity_index)
     }
 
-    // two valid cells, pop one and overwrite the data to another
-    pub(crate) fn move_overwrite_cell(
+    pub(crate) fn swap_cell() {}
+
+    //-----------------CELL OPERATION WITHIN TABLE-----------------//
+    // two valid cells, move one to another location, and pop that location
+    pub(crate) fn replace_cell_within(
         &mut self,
         comp_type: CompType,
         from_index: usize,
         to_index: usize,
     ) -> Result<*mut u8, &'static str> {
         let access = self.try_access(comp_type)?;
-        let ptr = access.remove(from_index)?;
-        access.write(ptr, to_index)
+        todo!()
     }
 
     // two valid cells
-    pub(crate) fn swap_cell(
+    pub(crate) fn swap_cell_within(
         &mut self,
         comp_type: CompType,
         cell1_entity_index: usize,
