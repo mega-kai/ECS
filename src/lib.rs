@@ -188,7 +188,7 @@ impl TypeErasedColumn {
                 result_vec.0.push(TableCellAccess::new(
                     *current_id,
                     self.comp_type,
-                    self.get(*current_id).unwrap(),
+                    self.is_valid_raw(*current_id).unwrap(),
                 ));
             } else {
                 continue;
@@ -211,7 +211,7 @@ impl TypeErasedColumn {
     }
 
     pub(crate) fn add(&mut self, ptr: *mut u8, entity_id: usize) -> Result<*mut u8, &'static str> {
-        if self.get(entity_id).is_ok() {
+        if self.is_valid_raw(entity_id).is_ok() {
             return Err("cell taken");
         }
 
@@ -255,7 +255,8 @@ impl TypeErasedColumn {
         Ok(vec)
     }
 
-    pub(crate) fn get(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
+    /// if empty returns err, else returns a dense ptr to that cell
+    pub(crate) fn is_valid_raw(&self, entity_id: usize) -> Result<*mut u8, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
         Ok(self.get_dense_ptr(dense_index))
     }
@@ -373,12 +374,12 @@ impl ComponentTable {
     }
 
     /// bypassing generational index; if empty, returns err, else returns raw ptr
-    pub(crate) fn is_empty_raw(
+    pub(crate) fn is_valid_raw(
         &mut self,
         entity_index: usize,
         comp_type: CompType,
     ) -> Result<*mut u8, &'static str> {
-        Ok(self.try_column(comp_type)?.get(entity_index)?)
+        Ok(self.try_column(comp_type)?.is_valid_raw(entity_index)?)
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -418,6 +419,7 @@ impl ComponentTable {
     ) -> Result<Vec<u8>, &'static str> {
         todo!()
     }
+
     /// two valid cells, move one to another location, and pop that location
     pub(crate) fn replace_cell_within(
         &mut self,
@@ -428,7 +430,7 @@ impl ComponentTable {
             return Err("not on the same column");
         }
         let column = self.try_column(from_key.column_type)?;
-        let ptr = column.get(from_key.entity_index)?;
+        let ptr = column.is_valid_raw(from_key.entity_index)?;
         let vec = column.replace(ptr, to_key.entity_index);
         vec
     }
