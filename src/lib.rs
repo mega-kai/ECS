@@ -226,13 +226,20 @@ impl TypeErasedColumn {
         src_ptr: *mut u8,
         entity_id: usize,
     ) -> Result<Vec<u8>, &'static str> {
-        // return final ptr within the column
         if entity_id >= self.sparse.len() {
             return Err("index overflow");
         }
         if let Some(dense_index) = self.sparse[entity_id] {
-            // probably returning a buffer
-            todo!()
+            // first allocate
+            let mut vec: Vec<u8> = vec![0; self.comp_type.layout.size()];
+            unsafe {
+                std::ptr::copy(
+                    self.get_dense_ptr(dense_index),
+                    vec.as_mut_ptr(),
+                    self.comp_type.layout.size(),
+                );
+            }
+            Ok(vec)
         } else {
             Err("trying to overwrite empty cell")
         }
@@ -263,6 +270,7 @@ impl TypeErasedColumn {
         }
     }
 
+    // "shallow swap"
     pub(crate) fn swap(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
         if index1 >= self.sparse.len() || index2 >= self.sparse.len() {
             Err("index overflow")
