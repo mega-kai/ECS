@@ -549,10 +549,9 @@ impl<'a> Command<'a> {
         if key.column_type != C::comp_type() {
             return Err("type not matching");
         }
-        let ptr = self.table.pop_cell(key)?;
-        // let result = unsafe { ptr.cast::<C>().as_mut().unwrap().clone() };
-        // Ok(result)
-        todo!()
+        let vec = self.table.pop_cell(key)?;
+        // cast this vec into a component
+        Ok(unsafe { vec.as_ptr().cast::<C>().as_ref().unwrap().clone() })
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
