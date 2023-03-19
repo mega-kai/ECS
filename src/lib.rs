@@ -498,6 +498,11 @@ impl SparseSet {
         }
     }
 
+    pub(crate) unsafe fn read_raw(&self, sparse_index: usize) -> Result<MultiPtr, &'static str> {
+        let dense_index = self.get_dense_index(sparse_index)?;
+        Ok(self.read_multi(dense_index))
+    }
+
     //-----------------GENERATION OPERATIONS-----------------//
     pub(crate) fn get_gen_val_sparse(
         &self,
@@ -656,17 +661,6 @@ impl SparseSet {
                 gen,
             ))
         }
-    }
-
-    pub(crate) fn read(&self, sparse_index: usize) -> Result<TableCellAccess, &'static str> {
-        let dense_index = self.get_dense_index(sparse_index)?;
-        let ptrs = unsafe { self.read_multi(dense_index) };
-        Ok(TableCellAccess::new(
-            sparse_index,
-            ptrs.comp_type,
-            ptrs.ptr,
-            self.get_gen_val_sparse(sparse_index)?,
-        ))
     }
 
     pub(crate) fn remove(&mut self, sparse_index: usize) -> Result<MultiValue, &'static str> {
@@ -828,7 +822,7 @@ impl MultiTable {
         comp_type: MultiCompType,
         sparse_index: usize,
     ) -> Result<MultiPtr, &'static str> {
-        self.try_column(comp_type)?.read(sparse_index)
+        unsafe { self.try_column(comp_type)?.read_raw(sparse_index) }
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -886,15 +880,18 @@ impl MultiTable {
         &mut self,
         from_key: TableCellAccess,
         to_key: TableCellAccess,
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<(MultiValue, TableCellAccess), &'static str> {
         // todo cache
         if from_key.column_type() != to_key.column_type() {
             return Err("not on the same column");
         }
-        let column = self.try_column(from_key.column_type())?;
-        let ptr = column.get_single(from_key.sparse_index(), from_key.column_type())?;
-        let vec = column.replace_multi(vec![ptr], to_key.sparse_index())?[1].clone();
-        Ok(vec)
+        let result = self
+            .try_column(from_key.column_type)?
+            .remove(to_key.sparse_index)?;
+        let access = self
+            .try_column(from_key.column_type)?
+            .move_value(from_key.sparse_index, to_key.sparse_index)?;
+        Ok((result, access))
     }
 
     /// shallow swap between two valid cells
