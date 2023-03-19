@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_variables, unused_imports, unused_mut)]
-#![feature(alloc_layout_extra, map_try_insert)]
+#![feature(alloc_layout_extra, map_try_insert, core_intrinsics, const_trait_impl)]
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::{Index, IndexMut, Range, RangeBounds};
@@ -183,7 +184,8 @@ pub trait Component: Clone + 'static {
 pub(crate) struct SparseIndex(Option<usize>);
 pub(crate) struct Generation(usize);
 
-/// built in sparse index and generation: sparse index offset would always be 0
+/// built in sparse index and generation: sparse index offset would always be 0, followed by generation
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MultiCompType {
     hashmap_layout_and_offsets: HashMap<CompType, (Layout, usize)>,
     total_layout: Layout,
@@ -237,10 +239,44 @@ impl MultiCompType {
     }
 }
 
+impl Hash for MultiCompType {
+    fn hash_slice<H: ~const std::hash::Hasher>(data: &[Self], state: &mut H)
+    where
+        Self: Sized,
+    {
+        //FIXME(const_trait_impl): revert to only a for loop
+        fn rt<T: Hash, H: std::hash::Hasher>(data: &[T], state: &mut H) {
+            for piece in data {
+                piece.hash(state)
+            }
+        }
+        const fn ct<T: ~const Hash, H: ~const std::hash::Hasher>(data: &[T], state: &mut H) {
+            let mut i = 0;
+            while i < data.len() {
+                data[i].hash(state);
+                i += 1;
+            }
+        }
+        // SAFETY: same behavior, CT just uses while instead of for
+        unsafe { std::intrinsics::const_eval_select((data, state), ct, rt) };
+    }
+
+    fn hash<H: ~const std::hash::Hasher>(&self, state: &mut H) {
+        // self.hashmap_layout_and_offsets.hash(state);
+        self.total_layout.hash(state);
+        self.generation_offset.hash(state);
+    }
+}
+
 //-----------------SINGLE TYPE ERASED POINTERS-----------------//
 pub(crate) struct OwningPtr {
     pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
+}
+impl OwningPtr {
+    pub(crate) fn new(ptr: *mut u8, comp_type: CompType) -> Self {
+        Self { ptr, comp_type }
+    }
 }
 pub(crate) struct SharedPtr {
     pub(crate) ptr: *const u8,
@@ -254,6 +290,11 @@ pub(crate) struct MutPtr {
 
 //-----------------MULTI TYPE ERASED POINTERS-----------------//
 pub(crate) struct MultiOwningPtr(Vec<OwningPtr>);
+impl MultiOwningPtr {
+    pub(crate) fn new_empty() -> Self {
+        Self(vec![])
+    }
+}
 pub(crate) struct MultiSharedPtr(Vec<SharedPtr>);
 pub(crate) struct MultiMutPtr(Vec<MutPtr>);
 
@@ -262,9 +303,33 @@ pub(crate) struct SingleValue {
     pub(crate) val: Vec<u8>,
     pub(crate) comp_type: CompType,
 }
+impl SingleValue {
+    pub(crate) fn new_empty(comp_type: CompType) -> Self {
+        Self {
+            val: vec![0u8; comp_type.layout.size()],
+            comp_type,
+        }
+    }
 
-pub(crate) struct MultiValue(Vec<SingleValue>);
+    pub(crate) fn write(&mut self, ptr: *mut u8) {
+        unsafe { std::ptr::copy(ptr, self.val.as_mut_ptr(), self.comp_type.layout.size()) }
+    }
+}
 
+pub(crate) struct MultiValue {
+    vec: Vec<SingleValue>,
+    pub(crate) comp_type: MultiCompType,
+}
+impl MultiValue {
+    pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
+        Self {
+            vec: vec![],
+            comp_type,
+        }
+    }
+}
+
+//----------------SPARSE SET------------------//
 pub(crate) struct SparseSet {
     ty: MultiCompType,
     data_heap_ptr: *mut u8,
@@ -276,13 +341,11 @@ pub(crate) struct SparseSet {
 
 // todo: make operations unsafe as they should be
 impl SparseSet {
-    pub(crate) fn new(comp_types: Vec<CompType>, size: usize) -> Self {
-        let result_comp_types = MultiCompType::new(comp_types);
-
+    pub(crate) fn new(comp_types: MultiCompType, size: usize) -> Self {
         let data_heap_ptr =
-            unsafe { std::alloc::alloc(result_comp_types.total_layout().repeat(size).unwrap().0) };
+            unsafe { std::alloc::alloc(comp_types.total_layout().repeat(size).unwrap().0) };
         Self {
-            ty: result_comp_types,
+            ty: comp_types,
             data_heap_ptr,
             capacity: size,
             len: 0,
@@ -292,7 +355,7 @@ impl SparseSet {
 
     //-----------------HELPERS-----------------//
     /// must ensure dense_index is valid first
-    fn get_dense_ptr(
+    fn get_single_dense_ptr(
         &self,
         dense_index: usize,
         comp_type: CompType,
@@ -333,16 +396,22 @@ impl SparseSet {
         &self,
         entity_id: usize,
         comp_type: CompType,
-    ) -> Result<*mut u8, &'static str> {
+    ) -> Result<OwningPtr, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
-        Ok(self.get_dense_ptr(dense_index, comp_type)?)
+        Ok(OwningPtr::new(
+            self.get_single_dense_ptr(dense_index, comp_type)?,
+            comp_type,
+        ))
     }
 
-    pub(crate) fn get_all(&self, comp_type: CompType) -> Result<Vec<*mut u8>, &'static str> {
-        let mut result_vec: Vec<*mut u8> = vec![];
+    pub(crate) fn get_all_of_a_single_type(
+        &self,
+        comp_type: CompType,
+    ) -> Result<MultiOwningPtr, &'static str> {
+        let mut result_vec = MultiOwningPtr::new_empty();
         for index in 0..self.len {
-            let ptr = self.get_dense_ptr(index, comp_type)?;
-            result_vec.push(ptr);
+            let ptr = self.get_single_dense_ptr(index, comp_type)?;
+            result_vec.0.push(OwningPtr::new(ptr, comp_type));
         }
         Ok(result_vec)
     }
@@ -365,14 +434,14 @@ impl SparseSet {
     /// todo handle generation since in this way the generation is passed from the caller
     pub(crate) fn add(
         &mut self,
-        ptrs: Vec<*mut u8>,
+        ptrs: MultiOwningPtr,
         entity_id: usize,
     ) -> Result<*mut u8, &'static str> {
         if self.get_dense_index(entity_id).is_ok() {
             return Err("cell taken");
         }
 
-        if ptrs.len() != self.ty.len() {
+        if ptrs.0.len() != self.ty.len() {
             return Err("wrong size of ptrs");
         }
 
@@ -385,71 +454,70 @@ impl SparseSet {
         }
 
         self.sparse[entity_id] = Some(self.len);
-        let raw_dst_ptr = self.get_dense_ptr(self.len, CompType::new::<SparseIndex>())?;
+        let raw_dst_ptr = self.get_single_dense_ptr(self.len, CompType::new::<SparseIndex>())?;
 
-        for (index, ptr) in ptrs.into_iter().enumerate() {
-            // unsafe {
-            //     self.write_single(self.len, ptr, self.comp_types.types[index]);
-            // }
-            todo!()
+        for ptr in ptrs.0 {
+            unsafe { self.write_single(self.len, ptr) }
         }
+
         self.len += 1;
         Ok(raw_dst_ptr)
     }
 
     pub(crate) unsafe fn replace_single(
         &self,
-        src_ptr: *mut u8,
+        src_ptr: OwningPtr,
         dense_index: usize,
         comp_type: CompType,
-    ) -> Vec<u8> {
-        let mut vec = vec![0u8; comp_type.layout.size()];
-        let vec_ptr = vec.as_mut_ptr();
+    ) -> SingleValue {
+        let mut result = SingleValue::new_empty(comp_type);
         let ptr_in_dense = self.data_heap_ptr.add(
             dense_index * self.ty.total_layout().size()
                 + self.ty.get_layout_and_offset(comp_type).unwrap().1,
         );
-        std::ptr::copy(ptr_in_dense, vec_ptr, comp_type.layout.size());
-        std::ptr::copy(src_ptr, ptr_in_dense, comp_type.layout.size());
-        vec
+        result.write(ptr_in_dense);
+        self.write_single(dense_index, src_ptr);
+        result
     }
 
     pub(crate) fn replace(
         &self,
-        ptrs: Vec<*mut u8>,
+        ptrs: MultiOwningPtr,
         dst_entity_index: usize,
-    ) -> Result<Vec<Vec<u8>>, &'static str> {
+    ) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(dst_entity_index)?;
-        let mut vec: Vec<Vec<u8>> = vec![];
-        for (index, ptr) in ptrs.into_iter().enumerate() {
-            // vec.push(unsafe {
-            //     self.replace_single(ptr, dense_index, self.comp_types.types[index])
-            // });
-            todo!()
+        let mut result = MultiValue::new_empty(MultiOwningPtr);
+        for ptr in &ptrs.0 {
+            let single = SingleValue::new_empty(ptr.comp_type);
+            let dense_ptr = self.get_single_dense_ptr(dense_index, ptr.comp_type)?;
+            single.write(dense_ptr);
+            result.0.push(single);
         }
-        Ok(vec)
+        Ok(result)
     }
 
-    unsafe fn remove_single(&self, dense_index: usize, comp_type: CompType) -> Vec<u8> {
-        let mut vec = vec![0u8; comp_type.layout.size()];
-        let vec_ptr = vec.as_mut_ptr();
+    unsafe fn copy_single(&self, dense_index: usize, comp_type: CompType) -> SingleValue {
+        let mut result = SingleValue::new_empty(comp_type);
         let src_ptr = self.data_heap_ptr.add(
             dense_index * self.ty.total_layout().size()
                 + self.ty.get_layout_and_offset(comp_type).unwrap().1,
         );
-        std::ptr::copy(src_ptr, vec_ptr, comp_type.layout.size());
-        vec
+        result.write(src_ptr);
+        result
     }
 
-    pub(crate) fn remove(&mut self, entity_id: usize) -> Result<Vec<Vec<u8>>, &'static str> {
+    pub(crate) fn remove(&mut self, entity_id: usize) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
         self.sparse[entity_id] = None;
-        let mut vec: Vec<Vec<u8>> = vec![];
-        for index in 0..self.ty.len() {
-            // vec.push(unsafe { self.remove_single(dense_index, self.comp_types.types[index]) });
-            todo!()
+        let mut result = MultiValue::new_empty();
+        for comp_type in self.ty.hashmap_layout_and_offsets.into_keys().into_iter() {
+            let ptr = self.get_single_dense_ptr(dense_index, comp_type)?;
+            let mut single = SingleValue::new_empty(comp_type);
+            single.write(ptr);
+            result.0.push(single);
         }
-        Ok(vec)
+
+        Ok(result)
     }
 
     // "shallow swap"
@@ -487,7 +555,7 @@ impl SparseSet {
 
 pub struct MultiTable {
     // with this column containing both component and generational index
-    table: HashMap<CompType, SparseSet>,
+    table: HashMap<MultiCompType, SparseSet>,
     // all valid cells in this row; indexed by entity index
     row_type_cache: HashMap<usize, AccessRow>,
     bottom_row_id: usize,
@@ -510,20 +578,24 @@ impl MultiTable {
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut SparseSet {
+    pub(crate) fn init_column(&mut self, comp_type: MultiCompType) -> &mut SparseSet {
         if self.try_column(comp_type).is_ok() {
             panic!("type cannot be init twice")
         }
-        self.table
-            .insert(comp_type, SparseSet::new(vec![comp_type], 64));
+        self.table.insert(comp_type, SparseSet::new(comp_type, 64));
         self.table.get_mut(&comp_type).unwrap()
     }
 
-    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<Vec<*mut u8>, &'static str> {
-        Ok(self.try_column(comp_type)?.get_all(comp_type)?)
+    pub(crate) fn get_column(
+        &mut self,
+        comp_type: MultiCompType,
+    ) -> Result<MultiOwningPtr, &'static str> {
+        Ok(self
+            .try_column(comp_type)?
+            .get_all_of_a_single_type(CompType::new::<SparseIndex>())?)
     }
 
-    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
+    pub(crate) fn pop_column(&mut self, comp_type: MultiCompType) -> Option<SparseSet> {
         self.table.remove(&comp_type)
     }
 
@@ -547,7 +619,7 @@ impl MultiTable {
     }
 
     //-----------------CELL MANIPULATION HELPERS-----------------//
-    fn try_column(&mut self, comp_type: CompType) -> Result<&mut SparseSet, &'static str> {
+    fn try_column(&mut self, comp_type: MultiCompType) -> Result<&mut SparseSet, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
         } else {
@@ -555,21 +627,21 @@ impl MultiTable {
         }
     }
 
-    fn ensure_column(&mut self, comp_type: CompType) -> &mut SparseSet {
+    fn ensure_column(&mut self, comp_type: MultiCompType) -> &mut SparseSet {
         self.table
             .entry(comp_type)
-            .or_insert(SparseSet::new(vec![comp_type], 64))
+            .or_insert(SparseSet::new(comp_type, 64))
     }
 
     /// bypassing generational index; if empty, returns err, else returns raw ptr
     pub(crate) fn is_valid_raw(
         &mut self,
         entity_index: usize,
-        comp_type: CompType,
-    ) -> Result<*mut u8, &'static str> {
+        comp_type: MultiCompType,
+    ) -> Result<OwningPtr, &'static str> {
         Ok(self
             .try_column(comp_type)?
-            .get_single(entity_index, comp_type)?)
+            .get_single(entity_index, CompType::new::<SparseIndex>())?)
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -578,12 +650,9 @@ impl MultiTable {
     pub(crate) fn push_cell(
         &mut self,
         dst_entity_index: usize,
-        comp_type: CompType,
-        ptr: *mut u8,
+        values: MultiValue,
     ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self
-            .ensure_column(comp_type)
-            .add(vec![ptr], dst_entity_index)?;
+        let ptr = self.ensure_column().add(vec![ptr], dst_entity_index)?;
         // todo cache
         Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr, 0))
     }
