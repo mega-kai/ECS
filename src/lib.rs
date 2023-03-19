@@ -180,16 +180,16 @@ pub trait Component: Clone + 'static {
     }
 }
 
-pub(crate) struct SparseIndex(usize);
+pub(crate) struct SparseIndex(Option<usize>);
+pub(crate) struct Generation(usize);
 
-pub(crate) struct CompTypes {
-    // todo: refactor to a hash map where k: comp_type, v: (layout, offset)
-    // todo: make generation a in built thing
-    types: Vec<CompType>,
-    start_offsets: Vec<usize>,
+/// built in sparse index and generation: sparse index offset would always be 0
+pub(crate) struct ColumnType {
+    hashmap_layout_and_offsets: HashMap<CompType, (Layout, usize)>,
     total_layout: Layout,
+    generation_offset: usize,
 }
-impl CompTypes {
+impl ColumnType {
     pub(crate) fn new(mut comp_types: Vec<CompType>) -> Self {
         if comp_types.is_empty() {
             panic!("empty types")
@@ -199,24 +199,20 @@ impl CompTypes {
                 panic!("ZST included in this vec")
             }
         }
-        // the first sizeof(SparseIndex) bytes would always contain the sparse index
-        let mut types = vec![CompType::new::<SparseIndex>()];
-        types.append(&mut comp_types);
+        let mut layout_and_offsets = HashMap::new();
+        // first
         let mut total_layout = Layout::new::<SparseIndex>();
-        // the 0th byte is where the sparse index starts
-        let mut start_offsets: Vec<usize> = vec![0];
-        for (index, each) in comp_types.into_iter().enumerate() {
-            if index == 0 {
-                continue;
-            }
-            let (new_layout, start_offset) = total_layout.extend(each.layout).unwrap();
-            start_offsets.push(start_offset);
-            total_layout = new_layout;
+        let (with_generation_layout, generation_offset) =
+            total_layout.extend(Layout::new::<Generation>()).unwrap();
+        for ty in comp_types {
+            let (layout, offset) = total_layout.extend(ty.layout).unwrap();
+            layout_and_offsets.insert(ty, (layout, offset));
         }
+
         Self {
-            types,
-            start_offsets,
+            hashmap_layout_and_offsets: layout_and_offsets,
             total_layout,
+            generation_offset,
         }
     }
 
@@ -224,30 +220,25 @@ impl CompTypes {
         self.total_layout
     }
 
-    fn try_index_from_comptype(&self, comp_type: CompType) -> Result<usize, &'static str> {
-        for (index, ty) in self.types.iter().enumerate() {
-            if comp_type == *ty {
-                return Ok(index);
-            }
-        }
-        Err("type not in this comp types bundle")
-    }
-
     pub(crate) fn get_layout_and_offset(
         &self,
         comp_type: CompType,
     ) -> Result<(Layout, usize), &'static str> {
-        let index = self.try_index_from_comptype(comp_type)?;
-        Ok((self.types[index].layout, self.start_offsets[index]))
+        let result = self
+            .hashmap_layout_and_offsets
+            .get(&comp_type)
+            .ok_or("type not in this comp types")?
+            .clone();
+        Ok(result)
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.types.len()
+        self.hashmap_layout_and_offsets.len()
     }
 }
 
 pub(crate) struct TypeErasedSparseSet {
-    comp_types: CompTypes,
+    ty: ColumnType,
     data_heap_ptr: *mut u8,
     pub(crate) capacity: usize,
     pub(crate) len: usize,
@@ -258,12 +249,12 @@ pub(crate) struct TypeErasedSparseSet {
 // todo: make operations unsafe as they should be
 impl TypeErasedSparseSet {
     pub(crate) fn new(comp_types: Vec<CompType>, size: usize) -> Self {
-        let result_comp_types = CompTypes::new(comp_types);
+        let result_comp_types = ColumnType::new(comp_types);
 
         let data_heap_ptr =
             unsafe { std::alloc::alloc(result_comp_types.total_layout().repeat(size).unwrap().0) };
         Self {
-            comp_types: result_comp_types,
+            ty: result_comp_types,
             data_heap_ptr,
             capacity: size,
             len: 0,
@@ -278,11 +269,11 @@ impl TypeErasedSparseSet {
         dense_index: usize,
         comp_type: CompType,
     ) -> Result<*mut u8, &'static str> {
-        let (_, offset) = self.comp_types.get_layout_and_offset(comp_type)?;
+        let (_, offset) = self.ty.get_layout_and_offset(comp_type)?;
         unsafe {
             Ok(self
                 .data_heap_ptr
-                .add(self.comp_types.total_layout().size() * dense_index + offset))
+                .add(self.ty.total_layout().size() * dense_index + offset))
         }
     }
 
@@ -301,7 +292,7 @@ impl TypeErasedSparseSet {
     fn get_sparse_index(&self, dense_index: usize) -> usize {
         unsafe {
             self.data_heap_ptr
-                .add(self.comp_types.total_layout().size() * dense_index)
+                .add(self.ty.total_layout().size() * dense_index)
                 .cast::<usize>()
                 .as_mut()
                 .unwrap()
@@ -332,11 +323,12 @@ impl TypeErasedSparseSet {
 
     unsafe fn write_single(&self, dense_index: usize, src_ptr: *mut u8, comp_type: CompType) {
         let dst_ptr = self.data_heap_ptr.add(
-            dense_index * self.comp_types.total_layout().size()
-                + self.comp_types.get_layout_and_offset(comp_type).unwrap().1,
+            dense_index * self.ty.total_layout().size()
+                + self.ty.get_layout_and_offset(comp_type).unwrap().1,
         );
         std::ptr::copy(src_ptr, dst_ptr, comp_type.layout.size());
     }
+
     /// on caller to ensure that all types match with comp types with the same order
     /// todo handle generation since in this way the generation is passed from the caller
     pub(crate) fn add(
@@ -348,7 +340,7 @@ impl TypeErasedSparseSet {
             return Err("cell taken");
         }
 
-        if ptrs.len() != self.comp_types.len() {
+        if ptrs.len() != self.ty.len() {
             return Err("wrong size of ptrs");
         }
 
@@ -364,10 +356,10 @@ impl TypeErasedSparseSet {
         let raw_dst_ptr = self.get_dense_ptr(self.len, CompType::new::<SparseIndex>())?;
 
         for (index, ptr) in ptrs.into_iter().enumerate() {
-            unsafe {
-                // todo index offset
-                self.write_single(self.len, ptr, self.comp_types.types[index]);
-            }
+            // unsafe {
+            //     self.write_single(self.len, ptr, self.comp_types.types[index]);
+            // }
+            todo!()
         }
         self.len += 1;
         Ok(raw_dst_ptr)
@@ -382,8 +374,8 @@ impl TypeErasedSparseSet {
         let mut vec = vec![0u8; comp_type.layout.size()];
         let vec_ptr = vec.as_mut_ptr();
         let ptr_in_dense = self.data_heap_ptr.add(
-            dense_index * self.comp_types.total_layout().size()
-                + self.comp_types.get_layout_and_offset(comp_type).unwrap().1,
+            dense_index * self.ty.total_layout().size()
+                + self.ty.get_layout_and_offset(comp_type).unwrap().1,
         );
         std::ptr::copy(ptr_in_dense, vec_ptr, comp_type.layout.size());
         std::ptr::copy(src_ptr, ptr_in_dense, comp_type.layout.size());
@@ -398,9 +390,10 @@ impl TypeErasedSparseSet {
         let dense_index = self.get_dense_index(dst_entity_index)?;
         let mut vec: Vec<Vec<u8>> = vec![];
         for (index, ptr) in ptrs.into_iter().enumerate() {
-            vec.push(unsafe {
-                self.replace_single(ptr, dense_index, self.comp_types.types[index])
-            });
+            // vec.push(unsafe {
+            //     self.replace_single(ptr, dense_index, self.comp_types.types[index])
+            // });
+            todo!()
         }
         Ok(vec)
     }
@@ -409,8 +402,8 @@ impl TypeErasedSparseSet {
         let mut vec = vec![0u8; comp_type.layout.size()];
         let vec_ptr = vec.as_mut_ptr();
         let src_ptr = self.data_heap_ptr.add(
-            dense_index * self.comp_types.total_layout().size()
-                + self.comp_types.get_layout_and_offset(comp_type).unwrap().1,
+            dense_index * self.ty.total_layout().size()
+                + self.ty.get_layout_and_offset(comp_type).unwrap().1,
         );
         std::ptr::copy(src_ptr, vec_ptr, comp_type.layout.size());
         vec
@@ -420,8 +413,9 @@ impl TypeErasedSparseSet {
         let dense_index = self.get_dense_index(entity_id)?;
         self.sparse[entity_id] = None;
         let mut vec: Vec<Vec<u8>> = vec![];
-        for index in 0..self.comp_types.len() {
-            vec.push(unsafe { self.remove_single(dense_index, self.comp_types.types[index]) });
+        for index in 0..self.ty.len() {
+            // vec.push(unsafe { self.remove_single(dense_index, self.comp_types.types[index]) });
+            todo!()
         }
         Ok(vec)
     }
@@ -439,14 +433,14 @@ impl TypeErasedSparseSet {
     fn double_dense_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
-            .comp_types
+            .ty
             .total_layout()
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = unsafe {
             std::alloc::realloc(
                 self.data_heap_ptr,
-                self.comp_types
+                self.ty
                     .total_layout()
                     .repeat(self.capacity)
                     .expect("could not repeat layout")
