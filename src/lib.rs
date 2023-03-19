@@ -179,13 +179,16 @@ pub trait Component: Clone + 'static {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub(crate) struct SparseIndex(Option<usize>);
+pub(crate) struct DenseIndex(usize);
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub(crate) struct SparseIndex(Option<DenseIndex>);
 impl SparseIndex {
     pub(crate) fn new_vacant() -> Self {
         Self(None)
     }
 
-    pub(crate) fn set(&mut self, sparse_index: Option<usize>) -> Self {
+    pub(crate) fn set(&mut self, sparse_index: Option<DenseIndex>) -> Self {
         self.0 = sparse_index;
         self.clone()
     }
@@ -679,8 +682,15 @@ impl SparseSet {
         if self.get_dense_index(to_index).is_ok() {
             return Err("cell occupied");
         } else {
-            self.sparse[to_index] = Some(self.get_dense_index(from_index)?);
-            todo!()
+            let dense_index = self.get_dense_index(from_index)?;
+            self.sparse[to_index] = Some(dense_index);
+            let gen = unsafe { self.generation_advance(dense_index) };
+            Ok(TableCellAccess::new(
+                to_index,
+                self.ty,
+                unsafe { self.read_multi(dense_index).ptr },
+                gen,
+            ))
         }
     }
 
@@ -698,12 +708,27 @@ impl SparseSet {
         &mut self,
         sparse_index1: usize,
         sparse_index2: usize,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(TableCellAccess, TableCellAccess), &'static str> {
         let dense_index1 = self.get_dense_index(sparse_index1)?;
+        let gen1 = unsafe { self.generation_advance(dense_index1) };
         let dense_index2 = self.get_dense_index(sparse_index2)?;
+        let gen2 = unsafe { self.generation_advance(dense_index2) };
         self.sparse[sparse_index1] = Some(dense_index2);
         self.sparse[sparse_index2] = Some(dense_index1);
-        Ok(())
+        Ok((
+            TableCellAccess::new(
+                sparse_index1,
+                self.ty,
+                unsafe { self.read_multi(dense_index2).ptr },
+                gen1,
+            ),
+            TableCellAccess::new(
+                sparse_index2,
+                self.ty,
+                unsafe { self.read_multi(dense_index1).ptr },
+                gen2,
+            ),
+        ))
     }
 
     pub(crate) fn get_cell(&self, sparse_index: usize) -> Result<TableCellAccess, &'static str> {
@@ -746,13 +771,10 @@ pub struct MultiTable {
     bottom_sparse_index: usize,
 }
 
-// TODO: generational indices
-// TODO: make this table multiple type compactable
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
 // TODO: refactoring api to location/pointer/generation seperate
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
-// TODO: concept of type erased ptr(shared, mut, owning) that includes comp type, and also a wrapper type; memory safety of TableCellAccess
 impl MultiTable {
     pub(crate) fn new() -> Self {
         Self {
@@ -899,7 +921,7 @@ impl MultiTable {
         &mut self,
         key1: TableCellAccess,
         key2: TableCellAccess,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(TableCellAccess, TableCellAccess), &'static str> {
         if key1.column_type() != key2.column_type() {
             return Err("not on the same column");
         }
