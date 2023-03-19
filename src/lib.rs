@@ -294,6 +294,7 @@ impl Hash for MultiCompType {
 }
 
 //-----------------SINGLE TYPE POINTERS-----------------//
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Ptr {
     pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
@@ -302,26 +303,39 @@ impl Ptr {
     pub(crate) fn new(ptr: *mut u8, comp_type: CompType) -> Self {
         Self { ptr, comp_type }
     }
+
+    pub(crate) fn to_value(self) -> Value {
+        let mut result = Value::new_empty(self.comp_type);
+        unsafe {
+            result.write(self.ptr);
+        }
+        result
+    }
 }
 
 pub(crate) struct MultiPtr {
-    vec: Vec<Ptr>,
+    ptr: *mut u8,
     comp_type: MultiCompType,
 }
 impl MultiPtr {
-    pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
-        Self {
-            vec: vec![],
-            comp_type,
+    pub(crate) fn new(ptr: *mut u8, comp_type: MultiCompType) -> Self {
+        Self { ptr, comp_type }
+    }
+
+    pub(crate) fn to_multi_value(self) -> MultiValue {
+        let mut result = MultiValue::new_empty(self.comp_type);
+        unsafe {
+            result.write(self.ptr);
         }
+        result
     }
 }
 //-----------------TYPE ERASED VALUES-----------------//
-pub(crate) struct SingleValue {
+pub(crate) struct Value {
     pub(crate) val: Vec<u8>,
     pub(crate) comp_type: CompType,
 }
-impl SingleValue {
+impl Value {
     pub(crate) fn new_empty(comp_type: CompType) -> Self {
         Self {
             val: vec![0u8; comp_type.layout.size()],
@@ -329,20 +343,34 @@ impl SingleValue {
         }
     }
 
-    pub(crate) fn write(&mut self, ptr: *mut u8) {
+    pub(crate) unsafe fn write(&mut self, ptr: *mut u8) {
         unsafe { std::ptr::copy(ptr, self.val.as_mut_ptr(), self.comp_type.layout.size()) }
     }
 }
 
 pub(crate) struct MultiValue {
-    vec: Vec<SingleValue>,
+    vec: Vec<u8>,
     pub(crate) comp_type: MultiCompType,
 }
 impl MultiValue {
     pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
         Self {
-            vec: vec![],
+            vec: vec![0u8; comp_type.total_layout.size()],
             comp_type,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.vec.len()
+    }
+
+    pub(crate) unsafe fn write(&mut self, ptr: *mut u8) {
+        unsafe {
+            std::ptr::copy(
+                ptr,
+                self.vec.as_mut_ptr(),
+                self.comp_type.total_layout.size(),
+            )
         }
     }
 }
@@ -409,46 +437,84 @@ impl SparseSet {
         }
     }
 
-    /// get_dense_index + get_dense_ptr
-    pub(crate) fn get_single(
+    pub(crate) fn get_column(&self) -> AccessColumn {
+        todo!()
+    }
+
+    //-----------------DENSE OPERATIONS-----------------//
+
+    pub(crate) unsafe fn read_single(
         &self,
-        entity_id: usize,
+        dense_index: usize,
         comp_type: CompType,
     ) -> Result<Ptr, &'static str> {
-        let dense_index = self.get_dense_index(entity_id)?;
         Ok(Ptr::new(
             self.get_single_dense_ptr(dense_index, comp_type)?,
             comp_type,
         ))
     }
 
-    pub(crate) fn get_all_of_a_single_type(
-        &self,
-        comp_type: CompType,
-    ) -> Result<MultiPtr, &'static str> {
-        let mut result_vec = MultiPtr::new_empty();
-        for index in 0..self.len {
-            let ptr = self.get_single_dense_ptr(index, comp_type)?;
-            result_vec.0.push(Ptr::new(ptr, comp_type));
-        }
-        Ok(result_vec)
+    pub(crate) unsafe fn read_multi(&self, dense_index: usize) -> MultiPtr {
+        let ptr = self
+            .data_heap_ptr
+            .add(dense_index * self.ty.total_layout.size());
+        MultiPtr::new(ptr, self.ty)
     }
 
-    //-----------------OPERATIONS-----------------//
-
-    unsafe fn write_single(&self, dense_index: usize, owning_ptr: Ptr) {
+    pub(crate) unsafe fn write_single(
+        &self,
+        dense_index: usize,
+        owning_ptr: Ptr,
+    ) -> Result<(), &'static str> {
         let dst_ptr = self.data_heap_ptr.add(
             dense_index * self.ty.total_layout().size()
-                + self
-                    .ty
-                    .get_layout_and_offset(owning_ptr.comp_type)
-                    .unwrap()
-                    .1,
+                + self.ty.get_layout_and_offset(owning_ptr.comp_type)?.1,
         );
         std::ptr::copy(owning_ptr.ptr, dst_ptr, owning_ptr.comp_type.layout.size());
+        Ok(())
     }
 
-    /// on caller to ensure that all types match with comp types with the same order
+    // todo: ignoring the sparse index and generation
+    pub(crate) unsafe fn write_multi(&self, dense_index: usize, owning_ptr: MultiPtr) {
+        let dst_ptr = self
+            .data_heap_ptr
+            .add(dense_index * self.ty.total_layout().size());
+        std::ptr::copy(owning_ptr.ptr, dst_ptr, self.ty.total_layout.size());
+    }
+
+    pub(crate) unsafe fn copy_single(
+        &self,
+        dense_index: usize,
+        comp_type: CompType,
+    ) -> Result<Value, &'static str> {
+        Ok(self.read_single(dense_index, comp_type)?.to_value())
+    }
+
+    pub(crate) unsafe fn copy_multi(&self, dense_index: usize) -> MultiValue {
+        self.read_multi(dense_index).to_multi_value()
+    }
+
+    pub(crate) unsafe fn replace_single(
+        &self,
+        dense_index: usize,
+        src_ptr: Ptr,
+    ) -> Result<Value, &'static str> {
+        let result = self.copy_single(dense_index, src_ptr.comp_type)?;
+        self.write_single(dense_index, src_ptr)?;
+        Ok(result)
+    }
+
+    pub(crate) unsafe fn replace_multi(
+        &self,
+        ptrs: MultiPtr,
+        dense_index: usize,
+    ) -> Result<MultiValue, &'static str> {
+        let result = self.copy_multi(dense_index);
+        self.write_multi(dense_index, ptrs);
+        Ok(result)
+    }
+
+    //-----------------SPARSE OPERATIONS-----------------//
     /// todo handle generation since in this way the generation is passed from the caller
     pub(crate) fn add(
         &mut self,
@@ -459,8 +525,8 @@ impl SparseSet {
             return Err("cell taken");
         }
 
-        if ptrs.0.len() != self.ty.len() {
-            return Err("wrong size of ptrs");
+        if ptrs.comp_type != self.ty {
+            return Err("wrong type of multi comp type");
         }
 
         if entity_id >= self.sparse.len() {
@@ -474,54 +540,10 @@ impl SparseSet {
         self.sparse[entity_id] = Some(self.len);
         let raw_dst_ptr = self.get_single_dense_ptr(self.len, CompType::new::<SparseIndex>())?;
 
-        for ptr in ptrs.0 {
-            unsafe { self.write_single(self.len, ptr) }
-        }
+        unsafe { self.write_multi(self.len, ptrs) }
 
         self.len += 1;
         Ok(raw_dst_ptr)
-    }
-
-    pub(crate) unsafe fn replace_single(
-        &self,
-        src_ptr: Ptr,
-        dense_index: usize,
-        comp_type: CompType,
-    ) -> SingleValue {
-        let mut result = SingleValue::new_empty(comp_type);
-        let ptr_in_dense = self.data_heap_ptr.add(
-            dense_index * self.ty.total_layout().size()
-                + self.ty.get_layout_and_offset(comp_type).unwrap().1,
-        );
-        result.write(ptr_in_dense);
-        self.write_single(dense_index, src_ptr);
-        result
-    }
-
-    pub(crate) fn replace(
-        &self,
-        ptrs: MultiPtr,
-        dst_entity_index: usize,
-    ) -> Result<MultiValue, &'static str> {
-        let dense_index = self.get_dense_index(dst_entity_index)?;
-        let mut result = MultiValue::new_empty(MultiPtr);
-        for ptr in &ptrs.0 {
-            let single = SingleValue::new_empty(ptr.comp_type);
-            let dense_ptr = self.get_single_dense_ptr(dense_index, ptr.comp_type)?;
-            single.write(dense_ptr);
-            result.0.push(single);
-        }
-        Ok(result)
-    }
-
-    unsafe fn copy_single(&self, dense_index: usize, comp_type: CompType) -> SingleValue {
-        let mut result = SingleValue::new_empty(comp_type);
-        let src_ptr = self.data_heap_ptr.add(
-            dense_index * self.ty.total_layout().size()
-                + self.ty.get_layout_and_offset(comp_type).unwrap().1,
-        );
-        result.write(src_ptr);
-        result
     }
 
     pub(crate) fn remove(&mut self, entity_id: usize) -> Result<MultiValue, &'static str> {
@@ -530,9 +552,9 @@ impl SparseSet {
         let mut result = MultiValue::new_empty();
         for comp_type in self.ty.hashmap_layout_and_offsets.into_keys().into_iter() {
             let ptr = self.get_single_dense_ptr(dense_index, comp_type)?;
-            let mut single = SingleValue::new_empty(comp_type);
+            let mut single = Value::new_empty(comp_type);
             single.write(ptr);
-            result.0.push(single);
+            result.vec.push(single);
         }
 
         Ok(result)
@@ -610,7 +632,7 @@ impl MultiTable {
     ) -> Result<MultiPtr, &'static str> {
         Ok(self
             .try_column(comp_type)?
-            .get_all_of_a_single_type(CompType::new::<SparseIndex>())?)
+            .read_multi(CompType::new::<SparseIndex>())?)
     }
 
     pub(crate) fn pop_column(&mut self, comp_type: MultiCompType) -> Option<SparseSet> {
@@ -668,14 +690,22 @@ impl MultiTable {
     pub(crate) fn push_cell(
         &mut self,
         dst_entity_index: usize,
-        values: MultiValue,
+        values: MultiPtr,
     ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self.ensure_column().add(vec![ptr], dst_entity_index)?;
+        let ptr = self
+            .ensure_column(values.comp_type)
+            .add(values, dst_entity_index)?;
         // todo cache
-        Ok(TableCellAccess::new(dst_entity_index, comp_type, ptr, 0))
+        // Ok(TableCellAccess::new(
+        //     dst_entity_index,
+        //     values.comp_type,
+        //     ptr,
+        //     0,
+        // ))
+        todo!()
     }
 
-    pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Vec<u8>, &'static str> {
+    pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Value, &'static str> {
         // todo cache
         // todo fix this indexing jankiness
         let thing = self
@@ -694,7 +724,7 @@ impl MultiTable {
     ) -> Result<Vec<u8>, &'static str> {
         // todo cache
         let column = self.try_column(key.column_type())?;
-        Ok(column.replace(vec![ptr], key.entity_index())?[1].clone())
+        Ok(column.replace_multi(vec![ptr], key.entity_index())?[1].clone())
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
@@ -729,7 +759,7 @@ impl MultiTable {
         }
         let column = self.try_column(from_key.column_type())?;
         let ptr = column.get_single(from_key.entity_index(), from_key.column_type())?;
-        let vec = column.replace(vec![ptr], to_key.entity_index())?[1].clone();
+        let vec = column.replace_multi(vec![ptr], to_key.entity_index())?[1].clone();
         Ok(vec)
     }
 
