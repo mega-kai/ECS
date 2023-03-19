@@ -189,33 +189,60 @@ pub(crate) struct Generation(usize);
 pub(crate) struct MultiCompType {
     hashmap_layout_and_offsets: HashMap<CompType, (Layout, usize)>,
     total_layout: Layout,
-    generation_offset: usize,
 }
 impl MultiCompType {
-    pub(crate) fn new(mut comp_types: Vec<CompType>) -> Self {
-        if comp_types.is_empty() {
-            panic!("empty types")
-        }
-        for ty in comp_types.iter() {
-            if ty.layout.size() == 0 {
-                panic!("ZST included in this vec")
-            }
-        }
+    pub(crate) fn new_empty() -> Self {
         let mut layout_and_offsets = HashMap::new();
-        // first
         let mut total_layout = Layout::new::<SparseIndex>();
         let (with_generation_layout, generation_offset) =
             total_layout.extend(Layout::new::<Generation>()).unwrap();
-        for ty in comp_types {
-            let (layout, offset) = total_layout.extend(ty.layout).unwrap();
-            layout_and_offsets.insert(ty, (layout, offset));
-        }
+        total_layout = with_generation_layout;
+        layout_and_offsets.insert(
+            CompType::new::<SparseIndex>(),
+            (Layout::new::<SparseIndex>(), 0),
+        );
+        layout_and_offsets.insert(
+            CompType::new::<Generation>(),
+            (Layout::new::<Generation>(), generation_offset),
+        );
 
         Self {
             hashmap_layout_and_offsets: layout_and_offsets,
             total_layout,
-            generation_offset,
         }
+    }
+
+    pub(crate) fn add(&mut self, comp_types: Vec<CompType>) -> Result<(), &'static str> {
+        if comp_types.is_empty() {
+            return Ok(());
+        }
+        for ty in comp_types.iter() {
+            if ty.layout.size() == 0 {
+                return Err("zst");
+            }
+            if self.get_layout_and_offset(*ty).is_ok() {
+                return Err("repeated type");
+            }
+        }
+
+        let final_layout = self.total_layout;
+
+        let (with_generation_layout, generation_offset) = final_layout
+            .extend(Layout::new::<Generation>())
+            .or(Err("cannot extend"))?;
+        for ty in comp_types {
+            let (layout, offset) = final_layout.extend(ty.layout).or(Err("cannot extend"))?;
+            self.hashmap_layout_and_offsets.insert(ty, (layout, offset));
+        }
+        self.total_layout = final_layout;
+
+        Ok(())
+    }
+
+    pub(crate) fn new(mut comp_types: Vec<CompType>) -> Result<Self, &'static str> {
+        let mut val = Self::new_empty();
+        val.add(comp_types)?;
+        Ok(val)
     }
 
     pub(crate) fn total_layout(&self) -> Layout {
@@ -262,42 +289,33 @@ impl Hash for MultiCompType {
     }
 
     fn hash<H: ~const std::hash::Hasher>(&self, state: &mut H) {
-        // self.hashmap_layout_and_offsets.hash(state);
         self.total_layout.hash(state);
-        self.generation_offset.hash(state);
     }
 }
 
-//-----------------SINGLE TYPE ERASED POINTERS-----------------//
-pub(crate) struct OwningPtr {
+//-----------------SINGLE TYPE POINTERS-----------------//
+pub(crate) struct Ptr {
     pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
 }
-impl OwningPtr {
+impl Ptr {
     pub(crate) fn new(ptr: *mut u8, comp_type: CompType) -> Self {
         Self { ptr, comp_type }
     }
 }
-pub(crate) struct SharedPtr {
-    pub(crate) ptr: *const u8,
-    pub(crate) comp_type: CompType,
-}
 
-pub(crate) struct MutPtr {
-    pub(crate) ptr: *mut u8,
-    pub(crate) comp_type: CompType,
+pub(crate) struct MultiPtr {
+    vec: Vec<Ptr>,
+    comp_type: MultiCompType,
 }
-
-//-----------------MULTI TYPE ERASED POINTERS-----------------//
-pub(crate) struct MultiOwningPtr(Vec<OwningPtr>);
-impl MultiOwningPtr {
-    pub(crate) fn new_empty() -> Self {
-        Self(vec![])
+impl MultiPtr {
+    pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
+        Self {
+            vec: vec![],
+            comp_type,
+        }
     }
 }
-pub(crate) struct MultiSharedPtr(Vec<SharedPtr>);
-pub(crate) struct MultiMutPtr(Vec<MutPtr>);
-
 //-----------------TYPE ERASED VALUES-----------------//
 pub(crate) struct SingleValue {
     pub(crate) val: Vec<u8>,
@@ -396,9 +414,9 @@ impl SparseSet {
         &self,
         entity_id: usize,
         comp_type: CompType,
-    ) -> Result<OwningPtr, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         let dense_index = self.get_dense_index(entity_id)?;
-        Ok(OwningPtr::new(
+        Ok(Ptr::new(
             self.get_single_dense_ptr(dense_index, comp_type)?,
             comp_type,
         ))
@@ -407,18 +425,18 @@ impl SparseSet {
     pub(crate) fn get_all_of_a_single_type(
         &self,
         comp_type: CompType,
-    ) -> Result<MultiOwningPtr, &'static str> {
-        let mut result_vec = MultiOwningPtr::new_empty();
+    ) -> Result<MultiPtr, &'static str> {
+        let mut result_vec = MultiPtr::new_empty();
         for index in 0..self.len {
             let ptr = self.get_single_dense_ptr(index, comp_type)?;
-            result_vec.0.push(OwningPtr::new(ptr, comp_type));
+            result_vec.0.push(Ptr::new(ptr, comp_type));
         }
         Ok(result_vec)
     }
 
     //-----------------OPERATIONS-----------------//
 
-    unsafe fn write_single(&self, dense_index: usize, owning_ptr: OwningPtr) {
+    unsafe fn write_single(&self, dense_index: usize, owning_ptr: Ptr) {
         let dst_ptr = self.data_heap_ptr.add(
             dense_index * self.ty.total_layout().size()
                 + self
@@ -434,7 +452,7 @@ impl SparseSet {
     /// todo handle generation since in this way the generation is passed from the caller
     pub(crate) fn add(
         &mut self,
-        ptrs: MultiOwningPtr,
+        ptrs: MultiPtr,
         entity_id: usize,
     ) -> Result<*mut u8, &'static str> {
         if self.get_dense_index(entity_id).is_ok() {
@@ -466,7 +484,7 @@ impl SparseSet {
 
     pub(crate) unsafe fn replace_single(
         &self,
-        src_ptr: OwningPtr,
+        src_ptr: Ptr,
         dense_index: usize,
         comp_type: CompType,
     ) -> SingleValue {
@@ -482,11 +500,11 @@ impl SparseSet {
 
     pub(crate) fn replace(
         &self,
-        ptrs: MultiOwningPtr,
+        ptrs: MultiPtr,
         dst_entity_index: usize,
     ) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(dst_entity_index)?;
-        let mut result = MultiValue::new_empty(MultiOwningPtr);
+        let mut result = MultiValue::new_empty(MultiPtr);
         for ptr in &ptrs.0 {
             let single = SingleValue::new_empty(ptr.comp_type);
             let dense_ptr = self.get_single_dense_ptr(dense_index, ptr.comp_type)?;
@@ -589,7 +607,7 @@ impl MultiTable {
     pub(crate) fn get_column(
         &mut self,
         comp_type: MultiCompType,
-    ) -> Result<MultiOwningPtr, &'static str> {
+    ) -> Result<MultiPtr, &'static str> {
         Ok(self
             .try_column(comp_type)?
             .get_all_of_a_single_type(CompType::new::<SparseIndex>())?)
@@ -638,7 +656,7 @@ impl MultiTable {
         &mut self,
         entity_index: usize,
         comp_type: MultiCompType,
-    ) -> Result<OwningPtr, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         Ok(self
             .try_column(comp_type)?
             .get_single(entity_index, CompType::new::<SparseIndex>())?)
