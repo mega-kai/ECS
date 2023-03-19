@@ -20,20 +20,20 @@ pub struct TableCellAccess {
     // pub(crate) assigned_index: usize,
     pub(crate) sparse_index: usize,
     pub(crate) column_type: MultiCompType,
-    pub(crate) access: *mut u8,
+    pub(crate) ptr: *mut u8,
     pub(crate) generation: Generation,
 }
 impl TableCellAccess {
     pub(crate) fn new(
         sparse_index: usize,
         column_type: MultiCompType,
-        access: *mut u8,
+        ptr: *mut u8,
         generation: Generation,
     ) -> Self {
         Self {
             sparse_index,
             column_type,
-            access,
+            ptr,
             generation,
         }
     }
@@ -57,7 +57,7 @@ impl AccessColumn {
         // on the promise that all accesses of this vec share the same type
         // assert_eq!(C::id(), self.0[0].column_index);
         self.into_iter()
-            .map(|x| unsafe { x.access.cast::<C>().as_mut().unwrap() })
+            .map(|x| unsafe { x.ptr.cast::<C>().as_mut().unwrap() })
             .collect::<Vec<&mut C>>()
     }
 }
@@ -180,6 +180,16 @@ pub trait Component: Clone + 'static {
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub(crate) struct SparseIndex(Option<usize>);
+impl SparseIndex {
+    pub(crate) fn new_vacant() -> Self {
+        Self(None)
+    }
+
+    pub(crate) fn set(&mut self, sparse_index: Option<usize>) -> Self {
+        self.0 = sparse_index;
+        self.clone()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub(crate) struct Generation(usize);
@@ -347,6 +357,26 @@ impl MultiPtr {
         }
         result
     }
+
+    pub(crate) fn get_sparse_index(&self) -> Option<usize> {
+        unsafe { self.ptr.cast::<Option<usize>>().as_ref().unwrap().clone() }
+    }
+
+    pub(crate) fn get_gen(&self) -> Generation {
+        unsafe {
+            self.ptr
+                .add(
+                    self.comp_type
+                        .get_layout_and_offset(GENERATION_COMPTYPE)
+                        .unwrap()
+                        .1,
+                )
+                .cast::<Generation>()
+                .as_ref()
+                .unwrap()
+                .clone()
+        }
+    }
 }
 //-----------------TYPE ERASED VALUES-----------------//
 pub(crate) struct Value {
@@ -397,6 +427,14 @@ impl MultiValue {
     }
 }
 
+// todo: make this indexable with SparseIndex
+pub(crate) struct SparseVec(Vec<SparseIndex>);
+impl SparseVec {
+    pub(crate) fn new_empty() -> Self {
+        Self(vec![])
+    }
+}
+
 //----------------SPARSE SET------------------//
 pub(crate) struct SparseSet {
     ty: MultiCompType,
@@ -408,6 +446,7 @@ pub(crate) struct SparseSet {
 }
 
 // todo: make operations unsafe as they should be
+// todo: turn all sparse_index into SparseIndex
 impl SparseSet {
     pub(crate) fn new(comp_types: MultiCompType, size: usize) -> Self {
         let data_heap_ptr =
@@ -460,13 +499,15 @@ impl SparseSet {
     }
 
     //-----------------GENERATION OPERATIONS-----------------//
-    pub(crate) unsafe fn get_gen_val_sparse(
+    pub(crate) fn get_gen_val_sparse(
         &self,
         sparse_index: usize,
     ) -> Result<Generation, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
-        self.copy_single(dense_index, GENERATION_COMPTYPE)?
-            .cast::<Generation>()
+        unsafe {
+            self.copy_single(dense_index, GENERATION_COMPTYPE)?
+                .cast::<Generation>()
+        }
     }
 
     pub(crate) unsafe fn get_gen_dense(&self, dense_index: usize) -> &mut Generation {
@@ -617,6 +658,17 @@ impl SparseSet {
         }
     }
 
+    pub(crate) fn read(&self, sparse_index: usize) -> Result<TableCellAccess, &'static str> {
+        let dense_index = self.get_dense_index(sparse_index)?;
+        let ptrs = unsafe { self.read_multi(dense_index) };
+        Ok(TableCellAccess::new(
+            sparse_index,
+            ptrs.comp_type,
+            ptrs.ptr,
+            self.get_gen_val_sparse(sparse_index)?,
+        ))
+    }
+
     pub(crate) fn remove(&mut self, sparse_index: usize) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
         self.sparse[sparse_index] = None;
@@ -625,7 +677,28 @@ impl SparseSet {
         Ok(val)
     }
 
-    // "shallow swap"
+    pub(crate) fn move_value(
+        &mut self,
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<TableCellAccess, &'static str> {
+        if self.get_dense_index(to_index).is_ok() {
+            return Err("cell occupied");
+        } else {
+            self.sparse[to_index] = Some(self.get_dense_index(from_index)?);
+            todo!()
+        }
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        sparse_index: usize,
+        ptrs: MultiPtr,
+    ) -> Result<MultiValue, &'static str> {
+        unsafe { self.replace_multi(ptrs, self.get_dense_index(sparse_index)?) }
+    }
+
+    // "shallow swap" of two valid cells
     // todo deal with the generation of swapping
     pub(crate) fn swap_within(
         &mut self,
@@ -734,7 +807,7 @@ impl MultiTable {
         Ok(cache.clone())
     }
 
-    //-----------------CELL MANIPULATION HELPERS-----------------//
+    //-----------------HELPERS-----------------//
     fn try_column(&mut self, comp_type: MultiCompType) -> Result<&mut SparseSet, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
@@ -749,16 +822,13 @@ impl MultiTable {
             .or_insert(SparseSet::new(comp_type, 64))
     }
 
-    /// bypassing generational index; if empty, returns err, else returns raw ptr
-    pub(crate) fn is_valid_raw(
+    // bypassing generation
+    pub(crate) fn try_cell(
         &mut self,
-        entity_index: usize,
         comp_type: MultiCompType,
-    ) -> Result<Ptr, &'static str> {
-        // Ok(self
-        //     .try_column(comp_type)?
-        //     .get_single(entity_index, CompType::new::<SparseIndex>())?)
-        todo!()
+        sparse_index: usize,
+    ) -> Result<MultiPtr, &'static str> {
+        self.try_column(comp_type)?.read(sparse_index)
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -766,30 +836,18 @@ impl MultiTable {
     // if not column init, init it automatically
     pub(crate) fn push_cell(
         &mut self,
-        dst_entity_index: usize,
+        sparse_index: usize,
         values: MultiPtr,
     ) -> Result<TableCellAccess, &'static str> {
-        let ptr = self
-            .ensure_column(values.comp_type)
-            .try_insert(values, dst_entity_index)?;
         // todo cache
-        // Ok(TableCellAccess::new(
-        //     dst_entity_index,
-        //     values.comp_type,
-        //     ptr,
-        //     0,
-        // ))
-        todo!()
+        self.ensure_column(values.comp_type)
+            .try_insert(values, sparse_index)
     }
 
-    pub(crate) fn pop_cell(&mut self, key: TableCellAccess) -> Result<Value, &'static str> {
+    pub(crate) fn pop_cell(&mut self, access: TableCellAccess) -> Result<MultiValue, &'static str> {
         // todo cache
-        // todo fix this indexing jankiness
-        let thing = self
-            .try_column(key.column_type())?
-            .remove(key.sparse_index())?[1]
-            .clone();
-        Ok(thing)
+        self.try_column(access.column_type)?
+            .remove(access.sparse_index)
     }
 
     /// write and return the old one in a series of bytes in a vector
@@ -797,11 +855,11 @@ impl MultiTable {
     pub(crate) fn replace_cell(
         &mut self,
         key: TableCellAccess,
-        ptr: *mut u8,
-    ) -> Result<Vec<u8>, &'static str> {
+        values: MultiPtr,
+    ) -> Result<MultiValue, &'static str> {
         // todo cache
-        let column = self.try_column(key.column_type())?;
-        Ok(column.replace_multi(vec![ptr], key.sparse_index())?[1].clone())
+        self.try_column(key.column_type)?
+            .replace(key.sparse_index, values)
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
@@ -812,15 +870,14 @@ impl MultiTable {
         from_key: TableCellAccess,
         to_index: usize,
     ) -> Result<TableCellAccess, &'static str> {
-        if self.is_valid_raw(to_index, from_key.column_type()).is_err() {
-            let ptr = self
-                .try_column(from_key.column_type())?
-                .try_insert(vec![from_key.access], to_index)?;
-            // todo cache
-            let new_access = TableCellAccess::new(to_index, from_key.column_type(), ptr, 0);
-            Ok(new_access)
+        if self.try_cell(from_key.column_type, to_index).is_ok() {
+            return Err("cell not vacant");
         } else {
-            Err("dst isn't empty")
+            let result = self
+                .try_column(from_key.column_type)?
+                .try_insert(MultiPtr::new(from_key.ptr, from_key.column_type), to_index)?;
+            self.pop_cell(from_key);
+            Ok(result)
         }
     }
 
