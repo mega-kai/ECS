@@ -12,39 +12,36 @@ use std::{
     fmt::Debug,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Location {
-    pub(crate) entity_index: usize,
-    pub(crate) column_type: CompType,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
+const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
     // pub(crate) assigned_index: usize,
-    pub(crate) location: Location,
+    pub(crate) sparse_index: usize,
+    pub(crate) column_type: MultiCompType,
     pub(crate) access: *mut u8,
-    pub(crate) generation: usize,
+    pub(crate) generation: Generation,
 }
 impl TableCellAccess {
     pub(crate) fn new(
-        entity_index: usize,
-        column_type: CompType,
+        sparse_index: usize,
+        column_type: MultiCompType,
         access: *mut u8,
-        generation: usize,
+        generation: Generation,
     ) -> Self {
         Self {
-            location: Location {
-                entity_index,
-                column_type,
-            },
+            sparse_index,
+            column_type,
             access,
             generation,
         }
     }
-    pub(crate) fn entity_index(&self) -> usize {
-        self.location.entity_index
+    pub(crate) fn sparse_index(&self) -> usize {
+        self.sparse_index
     }
-    pub(crate) fn column_type(&self) -> CompType {
-        self.location.column_type
+    pub(crate) fn column_type(&self) -> MultiCompType {
+        self.column_type
     }
 }
 
@@ -107,7 +104,7 @@ impl AccessRow {
 
     pub(crate) fn get_access_from_type(
         &self,
-        comp_type: CompType,
+        comp_type: MultiCompType,
     ) -> Result<TableCellAccess, &'static str> {
         let mut counter: usize = 0;
         let mut final_index: usize = 0;
@@ -134,8 +131,8 @@ impl AccessRow {
 
     pub(crate) fn get_current_generation(
         &self,
-        comp_type: CompType,
-    ) -> Result<usize, &'static str> {
+        comp_type: MultiCompType,
+    ) -> Result<Generation, &'static str> {
         Ok(self.get_access_from_type(comp_type)?.generation)
     }
 }
@@ -181,8 +178,21 @@ pub trait Component: Clone + 'static {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub(crate) struct SparseIndex(Option<usize>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub(crate) struct Generation(usize);
+impl Generation {
+    pub(crate) fn advance(&mut self) -> Self {
+        self.0 += 1;
+        self.clone()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = 0;
+    }
+}
 
 /// built in sparse index and generation: sparse index offset would always be 0, followed by generation
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,12 +314,20 @@ impl Ptr {
         Self { ptr, comp_type }
     }
 
-    pub(crate) fn to_value(self) -> Value {
+    pub(crate) fn cast_value(self) -> Value {
         let mut result = Value::new_empty(self.comp_type);
         unsafe {
             result.write(self.ptr);
         }
         result
+    }
+
+    pub(crate) unsafe fn cast<T>(&self) -> Result<&mut T, &'static str> {
+        if CompType::new::<T>() != self.comp_type {
+            return Err("type not matching");
+        } else {
+            Ok(self.ptr.cast::<T>().as_mut().ok_or("casting failure")?)
+        }
     }
 }
 
@@ -322,7 +340,7 @@ impl MultiPtr {
         Self { ptr, comp_type }
     }
 
-    pub(crate) fn to_multi_value(self) -> MultiValue {
+    pub(crate) fn cast_multi_value(self) -> MultiValue {
         let mut result = MultiValue::new_empty(self.comp_type);
         unsafe {
             result.write(self.ptr);
@@ -345,6 +363,10 @@ impl Value {
 
     pub(crate) unsafe fn write(&mut self, ptr: *mut u8) {
         unsafe { std::ptr::copy(ptr, self.val.as_mut_ptr(), self.comp_type.layout.size()) }
+    }
+
+    pub(crate) unsafe fn cast<T: Clone>(self) -> Result<T, &'static str> {
+        todo!()
     }
 }
 
@@ -437,17 +459,45 @@ impl SparseSet {
         }
     }
 
-    pub(crate) fn get_column(&self) -> AccessColumn {
-        todo!()
+    //-----------------GENERATION OPERATIONS-----------------//
+    pub(crate) unsafe fn get_gen_val_sparse(
+        &self,
+        sparse_index: usize,
+    ) -> Result<Generation, &'static str> {
+        let dense_index = self.get_dense_index(sparse_index)?;
+        self.copy_single(dense_index, GENERATION_COMPTYPE)?
+            .cast::<Generation>()
+    }
+
+    pub(crate) unsafe fn get_gen_dense(&self, dense_index: usize) -> &mut Generation {
+        let ptr = self
+            .read_single(dense_index, CompType::new::<Generation>())
+            .unwrap();
+        ptr.cast::<Generation>().unwrap()
+    }
+
+    pub(crate) unsafe fn generation_advance(&self, dense_index: usize) -> Generation {
+        let ptr = self.get_gen_dense(dense_index);
+        ptr.advance()
+    }
+
+    pub(crate) unsafe fn generation_clear(&self, dense_index: usize) {
+        self.get_gen_dense(dense_index).clear();
+    }
+
+    pub(crate) unsafe fn generation_write(&self, dense_index: usize, gen: Generation) {
+        *self.get_gen_dense(dense_index) = gen;
     }
 
     //-----------------DENSE OPERATIONS-----------------//
-
     pub(crate) unsafe fn read_single(
         &self,
         dense_index: usize,
         comp_type: CompType,
     ) -> Result<Ptr, &'static str> {
+        if comp_type == GENERATION_COMPTYPE || comp_type == SPARSE_INDEX_COMPTYPE {
+            return Err("trying to access gen/sparse index");
+        }
         Ok(Ptr::new(
             self.get_single_dense_ptr(dense_index, comp_type)?,
             comp_type,
@@ -465,21 +515,33 @@ impl SparseSet {
         &self,
         dense_index: usize,
         owning_ptr: Ptr,
-    ) -> Result<(), &'static str> {
+    ) -> Result<Generation, &'static str> {
+        if owning_ptr.comp_type == GENERATION_COMPTYPE
+            || owning_ptr.comp_type == SPARSE_INDEX_COMPTYPE
+        {
+            return Err("trying to access gen/sparse index");
+        }
         let dst_ptr = self.data_heap_ptr.add(
             dense_index * self.ty.total_layout().size()
                 + self.ty.get_layout_and_offset(owning_ptr.comp_type)?.1,
         );
         std::ptr::copy(owning_ptr.ptr, dst_ptr, owning_ptr.comp_type.layout.size());
-        Ok(())
+        Ok(self.generation_advance(dense_index))
     }
 
-    // todo: ignoring the sparse index and generation
-    pub(crate) unsafe fn write_multi(&self, dense_index: usize, owning_ptr: MultiPtr) {
+    pub(crate) unsafe fn write_multi(
+        &self,
+        dense_index: usize,
+        owning_ptr: MultiPtr,
+    ) -> Generation {
+        let mut previous_gen = self.get_gen_dense(dense_index).clone();
         let dst_ptr = self
             .data_heap_ptr
             .add(dense_index * self.ty.total_layout().size());
         std::ptr::copy(owning_ptr.ptr, dst_ptr, self.ty.total_layout.size());
+        let result_gen = previous_gen.advance();
+        self.generation_write(dense_index, result_gen);
+        result_gen
     }
 
     pub(crate) unsafe fn copy_single(
@@ -487,11 +549,11 @@ impl SparseSet {
         dense_index: usize,
         comp_type: CompType,
     ) -> Result<Value, &'static str> {
-        Ok(self.read_single(dense_index, comp_type)?.to_value())
+        Ok(self.read_single(dense_index, comp_type)?.cast_value())
     }
 
     pub(crate) unsafe fn copy_multi(&self, dense_index: usize) -> MultiValue {
-        self.read_multi(dense_index).to_multi_value()
+        self.read_multi(dense_index).cast_multi_value()
     }
 
     pub(crate) unsafe fn replace_single(
@@ -515,13 +577,22 @@ impl SparseSet {
     }
 
     //-----------------SPARSE OPERATIONS-----------------//
-    /// todo handle generation since in this way the generation is passed from the caller
-    pub(crate) fn add(
+
+    pub(crate) fn ensure_len(&mut self, sparse_index: usize) {
+        if sparse_index >= self.sparse.len() {
+            self.sparse.resize(sparse_index + 1, None);
+        }
+        if self.len >= self.capacity {
+            self.double_dense_cap();
+        }
+    }
+
+    pub(crate) fn try_insert(
         &mut self,
         ptrs: MultiPtr,
-        entity_id: usize,
-    ) -> Result<*mut u8, &'static str> {
-        if self.get_dense_index(entity_id).is_ok() {
+        sparse_index: usize,
+    ) -> Result<TableCellAccess, &'static str> {
+        if self.get_dense_index(sparse_index).is_ok() {
             return Err("cell taken");
         }
 
@@ -529,44 +600,51 @@ impl SparseSet {
             return Err("wrong type of multi comp type");
         }
 
-        if entity_id >= self.sparse.len() {
-            self.sparse.resize(entity_id + 1, None);
+        self.ensure_len(sparse_index);
+
+        self.sparse[sparse_index] = Some(self.len);
+
+        unsafe {
+            let gen = self.write_multi(self.len, ptrs);
+            let raw_dst_ptr = self.read_multi(self.len);
+            self.len += 1;
+            Ok(TableCellAccess::new(
+                sparse_index,
+                self.ty,
+                raw_dst_ptr.ptr,
+                gen,
+            ))
         }
-
-        if self.len >= self.capacity {
-            self.double_dense_cap();
-        }
-
-        self.sparse[entity_id] = Some(self.len);
-        let raw_dst_ptr = self.get_single_dense_ptr(self.len, CompType::new::<SparseIndex>())?;
-
-        unsafe { self.write_multi(self.len, ptrs) }
-
-        self.len += 1;
-        Ok(raw_dst_ptr)
     }
 
-    pub(crate) fn remove(&mut self, entity_id: usize) -> Result<MultiValue, &'static str> {
-        let dense_index = self.get_dense_index(entity_id)?;
-        self.sparse[entity_id] = None;
-        let mut result = MultiValue::new_empty();
-        for comp_type in self.ty.hashmap_layout_and_offsets.into_keys().into_iter() {
-            let ptr = self.get_single_dense_ptr(dense_index, comp_type)?;
-            let mut single = Value::new_empty(comp_type);
-            single.write(ptr);
-            result.vec.push(single);
-        }
-
-        Ok(result)
+    pub(crate) fn remove(&mut self, sparse_index: usize) -> Result<MultiValue, &'static str> {
+        let dense_index = self.get_dense_index(sparse_index)?;
+        self.sparse[sparse_index] = None;
+        let mut result = MultiValue::new_empty(self.ty);
+        let val = unsafe { self.read_multi(dense_index).cast_multi_value() };
+        Ok(val)
     }
 
     // "shallow swap"
-    pub(crate) fn swap_within(&mut self, index1: usize, index2: usize) -> Result<(), &'static str> {
-        let dense_index1 = self.get_dense_index(index1)?;
-        let dense_index2 = self.get_dense_index(index2)?;
-        self.sparse[index1] = Some(dense_index2);
-        self.sparse[index2] = Some(dense_index1);
+    // todo deal with the generation of swapping
+    pub(crate) fn swap_within(
+        &mut self,
+        sparse_index1: usize,
+        sparse_index2: usize,
+    ) -> Result<(), &'static str> {
+        let dense_index1 = self.get_dense_index(sparse_index1)?;
+        let dense_index2 = self.get_dense_index(sparse_index2)?;
+        self.sparse[sparse_index1] = Some(dense_index2);
+        self.sparse[sparse_index2] = Some(dense_index1);
         Ok(())
+    }
+
+    pub(crate) fn get_cell(&self, sparse_index: usize) -> Result<TableCellAccess, &'static str> {
+        todo!()
+    }
+
+    pub(crate) fn get_column(&self) -> AccessColumn {
+        todo!()
     }
 
     //-----------------ALLOCATION-----------------//
@@ -598,7 +676,7 @@ pub struct MultiTable {
     table: HashMap<MultiCompType, SparseSet>,
     // all valid cells in this row; indexed by entity index
     row_type_cache: HashMap<usize, AccessRow>,
-    bottom_row_id: usize,
+    bottom_sparse_index: usize,
 }
 
 // TODO: generational indices
@@ -613,7 +691,7 @@ impl MultiTable {
         Self {
             table: HashMap::new(),
             row_type_cache: HashMap::new(),
-            bottom_row_id: 0,
+            bottom_sparse_index: 0,
         }
     }
 
@@ -629,10 +707,8 @@ impl MultiTable {
     pub(crate) fn get_column(
         &mut self,
         comp_type: MultiCompType,
-    ) -> Result<MultiPtr, &'static str> {
-        Ok(self
-            .try_column(comp_type)?
-            .read_multi(CompType::new::<SparseIndex>())?)
+    ) -> Result<AccessColumn, &'static str> {
+        Ok(self.try_column(comp_type)?.get_column())
     }
 
     pub(crate) fn pop_column(&mut self, comp_type: MultiCompType) -> Option<SparseSet> {
@@ -641,12 +717,12 @@ impl MultiTable {
 
     //-----------------ROW MANIPULATION-----------------//
     pub(crate) fn init_row(&mut self) -> usize {
-        self.bottom_row_id += 1;
+        self.bottom_sparse_index += 1;
         self.row_type_cache.insert(
-            self.bottom_row_id - 1,
-            AccessRow::new_empty(self.bottom_row_id - 1),
+            self.bottom_sparse_index - 1,
+            AccessRow::new_empty(self.bottom_sparse_index - 1),
         );
-        self.bottom_row_id - 1
+        self.bottom_sparse_index - 1
     }
 
     pub(crate) fn get_row(&mut self, entity_index: usize) -> Result<AccessRow, &'static str> {
@@ -679,9 +755,10 @@ impl MultiTable {
         entity_index: usize,
         comp_type: MultiCompType,
     ) -> Result<Ptr, &'static str> {
-        Ok(self
-            .try_column(comp_type)?
-            .get_single(entity_index, CompType::new::<SparseIndex>())?)
+        // Ok(self
+        //     .try_column(comp_type)?
+        //     .get_single(entity_index, CompType::new::<SparseIndex>())?)
+        todo!()
     }
 
     //-----------------CELL IO OPERATION-----------------//
@@ -694,7 +771,7 @@ impl MultiTable {
     ) -> Result<TableCellAccess, &'static str> {
         let ptr = self
             .ensure_column(values.comp_type)
-            .add(values, dst_entity_index)?;
+            .try_insert(values, dst_entity_index)?;
         // todo cache
         // Ok(TableCellAccess::new(
         //     dst_entity_index,
@@ -710,7 +787,7 @@ impl MultiTable {
         // todo fix this indexing jankiness
         let thing = self
             .try_column(key.column_type())?
-            .remove(key.entity_index())?[1]
+            .remove(key.sparse_index())?[1]
             .clone();
         Ok(thing)
     }
@@ -724,7 +801,7 @@ impl MultiTable {
     ) -> Result<Vec<u8>, &'static str> {
         // todo cache
         let column = self.try_column(key.column_type())?;
-        Ok(column.replace_multi(vec![ptr], key.entity_index())?[1].clone())
+        Ok(column.replace_multi(vec![ptr], key.sparse_index())?[1].clone())
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
@@ -738,7 +815,7 @@ impl MultiTable {
         if self.is_valid_raw(to_index, from_key.column_type()).is_err() {
             let ptr = self
                 .try_column(from_key.column_type())?
-                .add(vec![from_key.access], to_index)?;
+                .try_insert(vec![from_key.access], to_index)?;
             // todo cache
             let new_access = TableCellAccess::new(to_index, from_key.column_type(), ptr, 0);
             Ok(new_access)
@@ -758,8 +835,8 @@ impl MultiTable {
             return Err("not on the same column");
         }
         let column = self.try_column(from_key.column_type())?;
-        let ptr = column.get_single(from_key.entity_index(), from_key.column_type())?;
-        let vec = column.replace_multi(vec![ptr], to_key.entity_index())?[1].clone();
+        let ptr = column.get_single(from_key.sparse_index(), from_key.column_type())?;
+        let vec = column.replace_multi(vec![ptr], to_key.sparse_index())?[1].clone();
         Ok(vec)
     }
 
@@ -774,7 +851,7 @@ impl MultiTable {
         }
         // todo cache
         self.try_column(key1.column_type())?
-            .swap_within(key1.entity_index(), key2.entity_index())
+            .swap_within(key1.sparse_index(), key2.sparse_index())
     }
 }
 
@@ -792,7 +869,7 @@ impl<FilterComp: Component> With<FilterComp> {
     pub(crate) fn apply_with_filter(mut vec: AccessColumn, table: &mut MultiTable) -> AccessColumn {
         vec.0.retain(|x| {
             if table
-                .get_row(x.entity_index())
+                .get_row(x.sparse_index())
                 .unwrap()
                 .get_access_from_type(FilterComp::get_id())
                 .is_ok()
@@ -813,7 +890,7 @@ impl<FilterComp: Component> Without<FilterComp> {
     ) -> AccessColumn {
         vec.0.retain(|x| {
             if table
-                .get_row(x.entity_index())
+                .get_row(x.sparse_index())
                 .unwrap()
                 .get_access_from_type(FilterComp::get_id())
                 .is_ok()
@@ -878,12 +955,12 @@ impl<'a> Command<'a> {
         if key.column_type() == comp_type {
             return Err("type not matching");
         }
-        let row = self.table.get_row(key.entity_index())?;
+        let row = self.table.get_row(key.sparse_index())?;
         if row.get_access_from_type(comp_type).is_ok() {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
-                key.entity_index(),
+                key.sparse_index(),
                 comp_type,
                 (&mut component as *mut C).cast::<u8>(),
             )?;
