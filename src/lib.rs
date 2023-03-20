@@ -454,7 +454,7 @@ impl SparseSet {
         &mut self,
         ptrs: Ptr,
         sparse_index: SparseIndex,
-    ) -> Result<TableCellAccess, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         if self.get_dense_index(sparse_index).is_ok() {
             return Err("cell taken");
         }
@@ -473,7 +473,7 @@ impl SparseSet {
             let gen = self.write(len, ptrs);
             let raw_dst_ptr = self.read(len);
             self.len += 1;
-            Ok(TableCellAccess::new(sparse_index, raw_dst_ptr))
+            Ok(Ptr::new(sparse_index, raw_dst_ptr))
         }
     }
 
@@ -491,16 +491,14 @@ impl SparseSet {
         &mut self,
         from_index: SparseIndex,
         to_index: SparseIndex,
-    ) -> Result<TableCellAccess, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         if self.get_dense_index(to_index).is_ok() {
             return Err("cell occupied");
         } else {
             let dense_index = self.get_dense_index(from_index)?;
             self.sparse[to_index] = Some(dense_index);
             let gen = unsafe { self.generation_advance(dense_index) };
-            Ok(TableCellAccess::new(to_index, unsafe {
-                self.read(dense_index)
-            }))
+            Ok(Ptr::new(to_index, unsafe { self.read(dense_index) }))
         }
     }
 
@@ -508,7 +506,7 @@ impl SparseSet {
         &mut self,
         sparse_index: SparseIndex,
         ptrs: Ptr,
-    ) -> Result<MultiValue, &'static str> {
+    ) -> Result<Value, &'static str> {
         unsafe { self.replace_multi(self.get_dense_index(sparse_index)?, ptrs) }
     }
 
@@ -517,7 +515,7 @@ impl SparseSet {
         &mut self,
         sparse_index1: SparseIndex,
         sparse_index2: SparseIndex,
-    ) -> Result<(TableCellAccess, TableCellAccess), &'static str> {
+    ) -> Result<(Ptr, Ptr), &'static str> {
         let dense_index1 = self.get_dense_index(sparse_index1)?;
         let gen1 = unsafe { self.generation_advance(dense_index1) };
         let dense_index2 = self.get_dense_index(sparse_index2)?;
@@ -525,17 +523,14 @@ impl SparseSet {
         self.sparse[sparse_index1] = Some(dense_index2);
         self.sparse[sparse_index2] = Some(dense_index1);
         Ok((
-            TableCellAccess::new(sparse_index1, unsafe { self.read(dense_index2) }),
-            TableCellAccess::new(sparse_index2, unsafe { self.read(dense_index1) }),
+            Ptr::new(sparse_index1, unsafe { self.read(dense_index2) }),
+            Ptr::new(sparse_index2, unsafe { self.read(dense_index1) }),
         ))
     }
 
-    pub(crate) fn get_cell(
-        &self,
-        sparse_index: SparseIndex,
-    ) -> Result<TableCellAccess, &'static str> {
+    pub(crate) fn get_cell(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
         let ptrs = unsafe { self.read_raw(sparse_index)? };
-        Ok(TableCellAccess::new(sparse_index, ptrs))
+        Ok(Ptr::new(sparse_index, ptrs))
     }
 
     pub(crate) fn get_column(&self) -> AccessColumn {
@@ -572,15 +567,15 @@ impl SparseSet {
     }
 }
 
-pub struct MultiTable {
-    table: HashMap<MultiCompType, SparseSet>,
+pub struct Table {
+    table: HashMap<CompType, SparseSet>,
     row_type_cache: HashMap<SparseIndex, AccessRow>,
     bottom_sparse_index: SparseIndex,
 }
 
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
-impl MultiTable {
+impl Table {
     pub(crate) fn new() -> Self {
         Self {
             table: HashMap::new(),
@@ -590,7 +585,7 @@ impl MultiTable {
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    pub(crate) fn init_column(&mut self, comp_type: MultiCompType) -> &mut SparseSet {
+    pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut SparseSet {
         if self.try_column(comp_type).is_ok() {
             panic!("type cannot be init twice")
         }
@@ -598,14 +593,11 @@ impl MultiTable {
         self.table.get_mut(&comp_type).unwrap()
     }
 
-    pub(crate) fn get_column(
-        &mut self,
-        comp_type: MultiCompType,
-    ) -> Result<AccessColumn, &'static str> {
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
         Ok(self.try_column(comp_type)?.get_column())
     }
 
-    pub(crate) fn pop_column(&mut self, comp_type: MultiCompType) -> Option<SparseSet> {
+    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
         self.table.remove(&comp_type)
     }
 
@@ -630,7 +622,7 @@ impl MultiTable {
     }
 
     //-----------------HELPERS-----------------//
-    fn try_column(&mut self, comp_type: MultiCompType) -> Result<&mut SparseSet, &'static str> {
+    fn try_column(&mut self, comp_type: CompType) -> Result<&mut SparseSet, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
         } else {
@@ -638,7 +630,7 @@ impl MultiTable {
         }
     }
 
-    fn ensure_column(&mut self, comp_type: MultiCompType) -> &mut SparseSet {
+    fn ensure_column(&mut self, comp_type: CompType) -> &mut SparseSet {
         self.table
             .entry(comp_type)
             .or_insert(SparseSet::new(comp_type, 64))
@@ -647,7 +639,7 @@ impl MultiTable {
     // bypassing generation
     pub(crate) fn try_cell(
         &mut self,
-        comp_type: MultiCompType,
+        comp_type: CompType,
         sparse_index: SparseIndex,
     ) -> Result<Ptr, &'static str> {
         unsafe { self.try_column(comp_type)?.read_raw(sparse_index) }
@@ -659,8 +651,9 @@ impl MultiTable {
     pub(crate) fn push_cell(
         &mut self,
         sparse_index: SparseIndex,
+        // todo: maybe Value??
         values: Ptr,
-    ) -> Result<TableCellAccess, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         let result = self
             .ensure_column(values.comp_type)
             .try_insert(values, sparse_index)?;
@@ -671,7 +664,7 @@ impl MultiTable {
         Ok(result)
     }
 
-    pub(crate) fn pop_cell(&mut self, access: TableCellAccess) -> Result<MultiValue, &'static str> {
+    pub(crate) fn pop_cell(&mut self, access: Ptr) -> Result<Value, &'static str> {
         self.row_type_cache
             .get_mut(&access.sparse_index)
             .ok_or("invalid row")?
@@ -682,9 +675,10 @@ impl MultiTable {
 
     pub(crate) fn replace_cell(
         &mut self,
-        access: TableCellAccess,
+        access: Ptr,
+        // todo maybe value?
         values: Ptr,
-    ) -> Result<MultiValue, &'static str> {
+    ) -> Result<Value, &'static str> {
         self.row_type_cache
             .get_mut(&access.sparse_index)
             .ok_or("invalid row")?
@@ -702,9 +696,9 @@ impl MultiTable {
     /// one valid cell move to an empty one, returns the new table cell access
     pub(crate) fn move_cell_within(
         &mut self,
-        from_key: TableCellAccess,
+        from_key: Ptr,
         to_index: SparseIndex,
-    ) -> Result<TableCellAccess, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         if self.try_cell(from_key.ptr.comp_type, to_index).is_ok() {
             return Err("cell not vacant");
         } else {
@@ -728,9 +722,9 @@ impl MultiTable {
     /// two valid cells, move one to another location, and pop that location
     pub(crate) fn replace_cell_within(
         &mut self,
-        from_key: TableCellAccess,
-        to_key: TableCellAccess,
-    ) -> Result<(MultiValue, TableCellAccess), &'static str> {
+        from_key: Ptr,
+        to_key: Ptr,
+    ) -> Result<(Value, Ptr), &'static str> {
         if from_key.column_type() != to_key.column_type() {
             return Err("not on the same column");
         }
@@ -756,9 +750,9 @@ impl MultiTable {
     /// shallow swap between two valid cells
     pub(crate) fn swap_cell_within(
         &mut self,
-        key1: TableCellAccess,
-        key2: TableCellAccess,
-    ) -> Result<(TableCellAccess, TableCellAccess), &'static str> {
+        key1: Ptr,
+        key2: Ptr,
+    ) -> Result<(Ptr, Ptr), &'static str> {
         if key1.column_type() != key2.column_type() {
             return Err("not on the same column");
         }
@@ -797,51 +791,48 @@ pub enum ExecutionFrequency {
 pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(mut vec: AccessColumn, table: &mut MultiTable) -> AccessColumn {
+    pub(crate) fn apply_with_filter(mut vec: AccessColumn, table: &mut Table) -> AccessColumn {
         todo!()
     }
 }
 
 pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> Without<FilterComp> {
-    pub(crate) fn apply_without_filter(
-        mut vec: AccessColumn,
-        table: &mut MultiTable,
-    ) -> AccessColumn {
+    pub(crate) fn apply_without_filter(mut vec: AccessColumn, table: &mut Table) -> AccessColumn {
         todo!()
     }
 }
 
 pub trait Filter: Sized {
-    fn apply_on(vec: AccessColumn, table: &mut MultiTable) -> AccessColumn;
+    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn;
 }
 impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: AccessColumn, table: &mut MultiTable) -> AccessColumn {
+    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn {
         With::<FilterComp>::apply_with_filter(vec, table)
     }
 }
 impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: AccessColumn, table: &mut MultiTable) -> AccessColumn {
+    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn {
         Without::<FilterComp>::apply_without_filter(vec, table)
     }
 }
 impl Filter for () {
-    fn apply_on(vec: AccessColumn, table: &mut MultiTable) -> AccessColumn {
+    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn {
         vec
     }
 }
 
 pub struct Command<'a> {
-    table: &'a mut MultiTable,
+    table: &'a mut Table,
 }
 
 // TODO: turns the api into wrapper functions of those in impl ComponentTable
 impl<'a> Command<'a> {
-    pub(crate) fn new(table: &'a mut MultiTable) -> Self {
+    pub(crate) fn new(table: &'a mut Table) -> Self {
         Self { table }
     }
 
-    pub fn add_component<C: Component>(&mut self, mut component: C) -> TableCellAccess {
+    pub fn add_component<C: Component>(&mut self, mut component: C) -> Ptr {
         // let comp_type = C::get_id();
         // let dst_entity_index = self.table.init_row();
         // self.table
@@ -857,9 +848,9 @@ impl<'a> Command<'a> {
     // key or entity index? usize or generational index?
     pub fn attach_component<C: Component>(
         &mut self,
-        key: TableCellAccess,
+        key: Ptr,
         mut component: C,
-    ) -> Result<TableCellAccess, &'static str> {
+    ) -> Result<Ptr, &'static str> {
         // let comp_type = C::get_id();
         // // making sure they are different types
         // if key.column_type() == comp_type {
@@ -879,10 +870,7 @@ impl<'a> Command<'a> {
         todo!()
     }
 
-    pub fn remove_component<C: Component>(
-        &mut self,
-        key: TableCellAccess,
-    ) -> Result<C, &'static str> {
+    pub fn remove_component<C: Component>(&mut self, key: Ptr) -> Result<C, &'static str> {
         // if key.column_type() != C::get_id() {
         //     return Err("type not matching");
         // }
@@ -925,7 +913,7 @@ impl System {
         }
     }
 
-    pub(crate) fn run(&self, table: &mut MultiTable) {
+    pub(crate) fn run(&self, table: &mut Table) {
         (self.func)(Command::new(table))
     }
 
@@ -984,14 +972,14 @@ impl Scheduler {
 }
 
 pub struct ECS {
-    table: MultiTable,
+    table: Table,
     scheduler: Scheduler,
 }
 
 impl ECS {
     pub fn new() -> Self {
         Self {
-            table: MultiTable::new(),
+            table: Table::new(),
             scheduler: Scheduler::new(),
         }
     }
