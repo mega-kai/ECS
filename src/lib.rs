@@ -1,4 +1,10 @@
-#![allow(dead_code, unused_variables, unused_imports, unused_mut)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    unreachable_code
+)]
 #![feature(
     alloc_layout_extra,
     map_try_insert,
@@ -7,11 +13,14 @@
     const_type_id,
     const_mut_refs
 )]
+use std::alloc::{dealloc, realloc};
 use std::collections::hash_map;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::num::NonZeroUsize;
 use std::ops::{Add, Index, IndexMut, Range, RangeBounds};
+use std::ptr::copy;
 use std::slice::SliceIndex;
 use std::{
     alloc::Layout,
@@ -19,6 +28,8 @@ use std::{
     collections::HashMap,
     fmt::Debug,
 };
+
+// TODO: check to properly drop all manually init memory
 
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
@@ -218,6 +229,96 @@ impl Generation {
 
     pub(crate) fn clear(&mut self) {
         self.0 = 0;
+    }
+}
+
+pub(crate) struct Offset(usize);
+
+pub(crate) struct Test {
+    comp_type_followed_by_offset_ptr: *mut u8,
+    len: usize,
+    total_layout: Layout,
+}
+impl Test {
+    unsafe fn extend(&mut self, size: NonZeroUsize) {
+        let unit_size = Layout::new::<CompType>().size() + Layout::new::<Offset>().size();
+        self.comp_type_followed_by_offset_ptr = realloc(
+            self.comp_type_followed_by_offset_ptr,
+            self.total_layout,
+            self.total_layout.size() + size.get() * unit_size,
+        )
+    }
+
+    unsafe fn write_comptype(&mut self, index: usize, mut comp_type: CompType) {
+        let unit_size = Layout::new::<CompType>().size() + Layout::new::<Offset>().size();
+        let comp_size = Layout::new::<CompType>().size();
+        let location = self.comp_type_followed_by_offset_ptr.add(index * unit_size);
+        let ptr_comp_type = (&mut comp_type as *mut CompType).cast::<u8>();
+        copy(ptr_comp_type, location, comp_size);
+    }
+
+    unsafe fn write_offset(&mut self, index: usize, mut offset: Offset) {
+        let unit_size = Layout::new::<CompType>().size() + Layout::new::<Offset>().size();
+        let comp_size = Layout::new::<CompType>().size();
+        let offset_size = Layout::new::<Offset>().size();
+        let location = self
+            .comp_type_followed_by_offset_ptr
+            .add(index * unit_size + comp_size);
+        let ptr_comp_type = (&mut offset as *mut Offset).cast::<u8>();
+        copy(ptr_comp_type, location, offset_size);
+    }
+
+    pub(crate) fn new_empty() -> Self {
+        let compty_of_compty = CompType::new::<CompType>();
+        let compty_of_offset = CompType::new::<Offset>();
+        let layout_comptype = Layout::new::<CompType>();
+        let layout_offset = Layout::new::<Offset>();
+        let (basic_layout, offset_val) = layout_comptype.extend(layout_offset).unwrap();
+        let offset_of_offset = Offset(offset_val);
+        let ptr = unsafe { std::alloc::alloc(basic_layout) };
+        let mut result = Self {
+            comp_type_followed_by_offset_ptr: ptr,
+            len: 2,
+            total_layout: basic_layout,
+        };
+        unsafe {
+            result.write_comptype(0, compty_of_compty);
+            result.write_comptype(1, compty_of_offset);
+            result.write_offset(0, Offset(0));
+            result.write_offset(1, offset_of_offset);
+        }
+        result
+    }
+
+    pub(crate) fn add(&mut self, comp_types: Vec<CompType>) -> Result<(), &'static str> {
+        if comp_types.is_empty() {
+            return Ok(());
+        }
+        for ty in comp_types.iter() {
+            if ty.layout.size() == 0 {
+                return Err("zst");
+            }
+            if self.get_layout_and_offset(*ty).is_ok() {
+                return Err("repeated type");
+            }
+        }
+        todo!()
+    }
+
+    pub(crate) fn new(mut comp_types: Vec<CompType>) -> Result<Self, &'static str> {
+        todo!()
+    }
+
+    pub(crate) fn get_layout_and_offset(
+        &self,
+        comp_type: CompType,
+    ) -> Result<(Layout, usize), &'static str> {
+        todo!()
+    }
+}
+impl Drop for Test {
+    fn drop(&mut self) {
+        unsafe { dealloc(self.comp_type_followed_by_offset_ptr, self.total_layout) }
     }
 }
 
