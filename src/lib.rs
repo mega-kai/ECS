@@ -63,10 +63,15 @@ pub trait Component: Clone + 'static {
 pub(crate) struct Ptr {
     pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
+    pub(crate) sparse_index: SparseIndex,
 }
 impl Ptr {
-    pub(crate) fn new(ptr: *mut u8, comp_type: CompType) -> Self {
-        Self { ptr, comp_type }
+    pub(crate) fn new(ptr: *mut u8, comp_type: CompType, sparse_index: SparseIndex) -> Self {
+        Self {
+            ptr,
+            comp_type,
+            sparse_index,
+        }
     }
 
     pub(crate) fn cast_value(self) -> Value {
@@ -83,6 +88,7 @@ impl Ptr {
 }
 
 //-----------------TYPE ERASED VALUE-----------------//
+#[derive(Clone)]
 pub(crate) struct Value {
     pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
@@ -116,11 +122,11 @@ impl Drop for Value {
 //-----------------TYPE ERASED PTR COLUMN/ROW-----------------//
 // all with the same component type
 #[derive(Clone)]
-pub struct AccessColumn {
-    pub(crate) vec: Vec<Ptr>,
+pub struct PtrColumn {
     pub(crate) comp_type: CompType,
+    pub(crate) vec: Vec<Ptr>,
 }
-impl AccessColumn {
+impl PtrColumn {
     pub(crate) fn new_empty(comp_type: CompType) -> Self {
         Self {
             vec: vec![],
@@ -132,7 +138,7 @@ impl AccessColumn {
         self.vec.push(access)
     }
 }
-impl<'a> IntoIterator for &'a AccessColumn {
+impl<'a> IntoIterator for &'a PtrColumn {
     type Item = &'a Ptr;
 
     type IntoIter = std::slice::Iter<'a, Ptr>;
@@ -141,7 +147,7 @@ impl<'a> IntoIterator for &'a AccessColumn {
         self.vec.iter()
     }
 }
-impl<'a> IntoIterator for &'a mut AccessColumn {
+impl<'a> IntoIterator for &'a mut PtrColumn {
     type Item = &'a mut Ptr;
 
     type IntoIter = std::slice::IterMut<'a, Ptr>;
@@ -153,47 +159,38 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 
 // all with the same id and and must have diff types
 #[derive(Clone)]
-pub struct AccessRow {
-    pub(crate) access_vec: Vec<Ptr>,
+pub struct PtrRow {
     pub(crate) sparse_index: SparseIndex,
+    pub(crate) data: HashMap<CompType, Ptr>,
 }
-impl AccessRow {
-    pub(crate) fn new(access_vec: Vec<Ptr>, sparse_index: SparseIndex) -> Self {
-        Self {
-            access_vec,
-            sparse_index,
-        }
+impl PtrRow {
+    pub(crate) fn new(
+        access_vec: Vec<Ptr>,
+        sparse_index: SparseIndex,
+    ) -> Result<Self, &'static str> {
+        let mut result = Self::new_empty(sparse_index);
+        result.push(access_vec)?;
+        Ok(result)
+    }
+
+    pub(crate) fn push(&mut self, access_vec: Vec<Ptr>) -> Result<(), &'static str> {
+        todo!()
+        // check if ptr clash with the ones within this row or within the access vec itself
     }
 
     pub(crate) fn new_empty(sparse_index: SparseIndex) -> Self {
         Self {
-            access_vec: vec![],
+            data: HashMap::new(),
             sparse_index,
         }
     }
 
-    pub(crate) fn push(&mut self, access: Ptr) -> Result<(), &'static str> {
-        if self.get(access.ptr.comp_type).is_ok() {
-            return Err("type duplicated");
-        }
-        self.access_vec.push(access);
-        Ok(())
-    }
-
     pub(crate) fn get(&self, comp_type: CompType) -> Result<Ptr, &'static str> {
-        let mut counter: usize = 0;
-        let mut final_index: usize = 0;
-        for (index, access) in self.into_iter().enumerate() {
-            if access.column_type() == comp_type {
-                counter += 1;
-                final_index = index;
-            }
-        }
-        match counter {
-            0 => Err("zero of this type in this row"),
-            1 => Ok(self.access_vec[final_index]),
-            _ => Err("more than one of this type in this row"),
-        }
+        Ok(self
+            .data
+            .get(&comp_type)
+            .ok_or("type not present in this row")?
+            .clone())
     }
 
     pub(crate) fn pop(&mut self, comp_type: CompType) -> Result<Ptr, &'static str> {
@@ -208,8 +205,8 @@ impl AccessRow {
         match counter {
             0 => Err("zero of this type in this row"),
             1 => {
-                let result = Ok(self.access_vec[final_index]);
-                self.access_vec.swap_remove(final_index);
+                let result = Ok(self.data[final_index]);
+                self.data.swap_remove(final_index);
                 result
             }
             _ => Err("more than one of this type in this row"),
@@ -217,14 +214,14 @@ impl AccessRow {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.access_vec.is_empty()
+        self.data.is_empty()
     }
 
     pub(crate) fn contains_access(&self, key: Ptr) -> bool {
         if key.sparse_index != self.sparse_index {
             return false;
         }
-        self.access_vec.contains(&key)
+        self.data.contains(&key)
     }
 
     pub(crate) fn get_current_generation(
@@ -234,22 +231,22 @@ impl AccessRow {
         Ok(self.get(comp_type)?.ptr.get_gen())
     }
 }
-impl<'a> IntoIterator for &'a AccessRow {
+impl<'a> IntoIterator for &'a PtrRow {
     type Item = &'a Ptr;
 
     type IntoIter = std::slice::Iter<'a, Ptr>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.access_vec.iter()
+        self.data.iter()
     }
 }
-impl<'a> IntoIterator for &'a mut AccessRow {
+impl<'a> IntoIterator for &'a mut PtrRow {
     type Item = &'a mut Ptr;
 
     type IntoIter = std::slice::IterMut<'a, Ptr>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.access_vec.iter_mut()
+        self.data.iter_mut()
     }
 }
 
@@ -536,8 +533,8 @@ impl SparseSet {
         Ok(Ptr::new(sparse_index, ptrs))
     }
 
-    pub(crate) fn get_column(&self) -> AccessColumn {
-        let mut result = AccessColumn::new_empty(self.ty);
+    pub(crate) fn get_column(&self) -> PtrColumn {
+        let mut result = PtrColumn::new_empty(self.ty);
         for index in 0..self.len {
             let dense_index = DenseIndex(index);
             let ptrs = unsafe { self.read(dense_index) };
@@ -572,7 +569,7 @@ impl SparseSet {
 
 pub struct Table {
     table: HashMap<CompType, SparseSet>,
-    row_type_cache: HashMap<SparseIndex, AccessRow>,
+    row_type_cache: HashMap<SparseIndex, PtrRow>,
     bottom_sparse_index: SparseIndex,
 }
 
@@ -596,7 +593,7 @@ impl Table {
         self.table.get_mut(&comp_type).unwrap()
     }
 
-    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<AccessColumn, &'static str> {
+    pub(crate) fn get_column(&mut self, comp_type: CompType) -> Result<PtrColumn, &'static str> {
         Ok(self.try_column(comp_type)?.get_column())
     }
 
@@ -609,13 +606,13 @@ impl Table {
         let result = self.bottom_sparse_index;
         self.row_type_cache.insert(
             self.bottom_sparse_index,
-            AccessRow::new_empty(self.bottom_sparse_index),
+            PtrRow::new_empty(self.bottom_sparse_index),
         );
         self.bottom_sparse_index.0 += 1;
         result
     }
 
-    pub(crate) fn get_row(&mut self, sparse_index: SparseIndex) -> Result<AccessRow, &'static str> {
+    pub(crate) fn get_row(&mut self, sparse_index: SparseIndex) -> Result<PtrRow, &'static str> {
         // since init row ensures the existence of all row cache
         let cache = self
             .row_type_cache
@@ -794,33 +791,33 @@ pub enum ExecutionFrequency {
 pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> With<FilterComp> {
     // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(mut vec: AccessColumn, table: &mut Table) -> AccessColumn {
+    pub(crate) fn apply_with_filter(mut vec: PtrColumn, table: &mut Table) -> PtrColumn {
         todo!()
     }
 }
 
 pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
 impl<FilterComp: Component> Without<FilterComp> {
-    pub(crate) fn apply_without_filter(mut vec: AccessColumn, table: &mut Table) -> AccessColumn {
+    pub(crate) fn apply_without_filter(mut vec: PtrColumn, table: &mut Table) -> PtrColumn {
         todo!()
     }
 }
 
 pub trait Filter: Sized {
-    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn;
+    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn;
 }
 impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn {
+    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn {
         With::<FilterComp>::apply_with_filter(vec, table)
     }
 }
 impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn {
+    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn {
         Without::<FilterComp>::apply_without_filter(vec, table)
     }
 }
 impl Filter for () {
-    fn apply_on(vec: AccessColumn, table: &mut Table) -> AccessColumn {
+    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn {
         vec
     }
 }
@@ -852,7 +849,7 @@ impl<'a> Command<'a> {
         todo!()
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
+    pub fn query<C: Component, F: Filter>(&mut self) -> PtrColumn {
         todo!()
     }
 }
