@@ -13,7 +13,7 @@
     const_type_id,
     const_mut_refs
 )]
-use std::alloc::{dealloc, realloc};
+use std::alloc::{alloc, dealloc, realloc};
 use std::collections::hash_map;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -87,6 +87,18 @@ impl Ptr {
     }
 }
 
+impl PartialOrd for Ptr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.sparse_index.partial_cmp(&other.sparse_index)
+    }
+}
+
+impl Ord for Ptr {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.sparse_index.cmp(&other.sparse_index)
+    }
+}
+
 //-----------------TYPE ERASED VALUE-----------------//
 #[derive(Clone)]
 pub(crate) struct Value {
@@ -96,7 +108,7 @@ pub(crate) struct Value {
 impl Value {
     pub(crate) fn new(src_ptr: *mut u8, comp_type: CompType) -> Self {
         unsafe {
-            let ptr = std::alloc::alloc(comp_type.layout);
+            let ptr = alloc(comp_type.layout);
             std::ptr::copy(src_ptr, ptr, comp_type.layout.size());
             Self { ptr, comp_type }
         }
@@ -114,16 +126,17 @@ impl Value {
 impl Drop for Value {
     fn drop(&mut self) {
         unsafe {
-            std::alloc::dealloc(self.ptr, self.comp_type.layout);
+            dealloc(self.ptr, self.comp_type.layout);
         }
     }
 }
 
 //-----------------TYPE ERASED PTR COLUMN/ROW-----------------//
-// all with the same component type
+// all with the same component type and different sparse index
 #[derive(Clone)]
 pub struct PtrColumn {
     pub(crate) comp_type: CompType,
+    // sorted with sparse index
     pub(crate) vec: Vec<Ptr>,
 }
 impl PtrColumn {
@@ -134,10 +147,29 @@ impl PtrColumn {
         }
     }
 
-    pub(crate) fn push(&mut self, access: Ptr) {
-        self.vec.push(access)
+    pub(crate) fn push(&mut self, mut access: Vec<Ptr>) -> Result<(), &'static str> {
+        // right now it doesn't check if there's duplicate ptr sparse index
+        for each in access.iter() {
+            if each.comp_type != self.comp_type {
+                return Err("type not matching");
+            }
+        }
+        self.vec.append(&mut access);
+        self.vec.sort();
+        Ok(())
+    }
+
+    pub(crate) fn remove<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<Ptr> {
+        let result = self.vec.drain(range).collect();
+        self.vec.sort();
+        result
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 }
+
 impl<'a> IntoIterator for &'a PtrColumn {
     type Item = &'a Ptr;
 
@@ -161,28 +193,26 @@ impl<'a> IntoIterator for &'a mut PtrColumn {
 #[derive(Clone)]
 pub struct PtrRow {
     pub(crate) sparse_index: SparseIndex,
+    // not sorted
     pub(crate) data: HashMap<CompType, Ptr>,
 }
 impl PtrRow {
-    pub(crate) fn new(
-        access_vec: Vec<Ptr>,
-        sparse_index: SparseIndex,
-    ) -> Result<Self, &'static str> {
-        let mut result = Self::new_empty(sparse_index);
-        result.push(access_vec)?;
-        Ok(result)
-    }
-
-    pub(crate) fn push(&mut self, access_vec: Vec<Ptr>) -> Result<(), &'static str> {
-        todo!()
-        // check if ptr clash with the ones within this row or within the access vec itself
-    }
-
     pub(crate) fn new_empty(sparse_index: SparseIndex) -> Self {
         Self {
             data: HashMap::new(),
             sparse_index,
         }
+    }
+
+    pub(crate) fn push(&mut self, mut access_vec: Vec<Ptr>) -> Result<(), &'static str> {
+        // not checking if comp type is being replaced
+        for each in access_vec.into_iter() {
+            if each.sparse_index != self.sparse_index {
+                return Err("sparse index not matching");
+            }
+            self.data.insert(each.comp_type, each);
+        }
+        Ok(())
     }
 
     pub(crate) fn get(&self, comp_type: CompType) -> Result<Ptr, &'static str> {
@@ -193,42 +223,8 @@ impl PtrRow {
             .clone())
     }
 
-    pub(crate) fn pop(&mut self, comp_type: CompType) -> Result<Ptr, &'static str> {
-        let mut counter: usize = 0;
-        let mut final_index: usize = 0;
-        for (index, access) in self.into_iter().enumerate() {
-            if access.column_type() == comp_type {
-                counter += 1;
-                final_index = index;
-            }
-        }
-        match counter {
-            0 => Err("zero of this type in this row"),
-            1 => {
-                let result = Ok(self.data[final_index]);
-                self.data.swap_remove(final_index);
-                result
-            }
-            _ => Err("more than one of this type in this row"),
-        }
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
         self.data.is_empty()
-    }
-
-    pub(crate) fn contains_access(&self, key: Ptr) -> bool {
-        if key.sparse_index != self.sparse_index {
-            return false;
-        }
-        self.data.contains(&key)
-    }
-
-    pub(crate) fn get_current_generation(
-        &self,
-        comp_type: CompType,
-    ) -> Result<Generation, &'static str> {
-        Ok(self.get(comp_type)?.ptr.get_gen())
     }
 }
 impl<'a> IntoIterator for &'a PtrRow {
@@ -310,8 +306,7 @@ pub(crate) struct SparseSet {
 
 impl SparseSet {
     pub(crate) fn new(comp_types: CompType, size: usize) -> Self {
-        let data_heap_ptr =
-            unsafe { std::alloc::alloc(comp_types.total_layout.repeat(size).unwrap().0) };
+        let data_heap_ptr = unsafe { alloc(comp_types.total_layout.repeat(size).unwrap().0) };
         Self {
             ty: comp_types,
             data_heap_ptr,
@@ -552,7 +547,7 @@ impl SparseSet {
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = unsafe {
-            std::alloc::realloc(
+            realloc(
                 self.data_heap_ptr,
                 self.ty
                     .total_layout
@@ -564,6 +559,12 @@ impl SparseSet {
         };
         self.capacity = new_capacity;
         self.data_heap_ptr = new_data_ptr;
+    }
+}
+
+impl Drop for SparseSet {
+    fn drop(&mut self) {
+        todo!()
     }
 }
 
