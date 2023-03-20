@@ -232,16 +232,19 @@ impl Generation {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Offset(usize);
 
-pub(crate) struct Test {
+// built in sparse index and generation: sparse index offset would always be 0, followed by generation
+#[derive(Debug, Copy, Hash, PartialEq, Eq)]
+pub(crate) struct MultiCompType {
     comp_type_followed_by_offset_ptr: *mut u8,
     len: usize,
     total_layout: Layout,
 }
-impl Test {
+impl MultiCompType {
     unsafe fn extend(&mut self, size: NonZeroUsize) {
-        let unit_size = Layout::new::<CompType>().size() + Layout::new::<Offset>().size();
+        let unit_size = size_of::<CompType>() + size_of::<Offset>();
         self.comp_type_followed_by_offset_ptr = realloc(
             self.comp_type_followed_by_offset_ptr,
             self.total_layout,
@@ -250,17 +253,17 @@ impl Test {
     }
 
     unsafe fn write_comptype(&mut self, index: usize, mut comp_type: CompType) {
-        let unit_size = Layout::new::<CompType>().size() + Layout::new::<Offset>().size();
-        let comp_size = Layout::new::<CompType>().size();
+        let unit_size = size_of::<CompType>() + size_of::<Offset>();
+        let comp_size = size_of::<CompType>();
         let location = self.comp_type_followed_by_offset_ptr.add(index * unit_size);
         let ptr_comp_type = (&mut comp_type as *mut CompType).cast::<u8>();
         copy(ptr_comp_type, location, comp_size);
     }
 
     unsafe fn write_offset(&mut self, index: usize, mut offset: Offset) {
-        let unit_size = Layout::new::<CompType>().size() + Layout::new::<Offset>().size();
-        let comp_size = Layout::new::<CompType>().size();
-        let offset_size = Layout::new::<Offset>().size();
+        let unit_size = size_of::<CompType>() + size_of::<Offset>();
+        let comp_size = size_of::<CompType>();
+        let offset_size = size_of::<Offset>();
         let location = self
             .comp_type_followed_by_offset_ptr
             .add(index * unit_size + comp_size);
@@ -302,134 +305,84 @@ impl Test {
                 return Err("repeated type");
             }
         }
-        todo!()
-    }
 
-    pub(crate) fn new(mut comp_types: Vec<CompType>) -> Result<Self, &'static str> {
-        todo!()
-    }
-
-    pub(crate) fn get_layout_and_offset(
-        &self,
-        comp_type: CompType,
-    ) -> Result<(Layout, usize), &'static str> {
-        todo!()
-    }
-}
-impl Drop for Test {
-    fn drop(&mut self) {
-        unsafe { dealloc(self.comp_type_followed_by_offset_ptr, self.total_layout) }
-    }
-}
-
-/// built in sparse index and generation: sparse index offset would always be 0, followed by generation
-/// todo refactor this so it can be copy
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MultiCompType {
-    hashmap_layout_and_offsets: HashMap<CompType, (Layout, usize)>,
-    total_layout: Layout,
-}
-impl MultiCompType {
-    pub(crate) fn new_empty() -> Self {
-        let mut layout_and_offsets = HashMap::new();
-        let mut total_layout = Layout::new::<SparseIndex>();
-        let (with_generation_layout, generation_offset) =
-            total_layout.extend(Layout::new::<Generation>()).unwrap();
-        total_layout = with_generation_layout;
-        layout_and_offsets.insert(
-            CompType::new::<SparseIndex>(),
-            (Layout::new::<SparseIndex>(), 0),
-        );
-        layout_and_offsets.insert(
-            CompType::new::<Generation>(),
-            (Layout::new::<Generation>(), generation_offset),
-        );
-
-        Self {
-            hashmap_layout_and_offsets: layout_and_offsets,
-            total_layout,
+        unsafe {
+            self.extend(NonZeroUsize::new_unchecked(comp_types.len()));
         }
-    }
 
-    pub(crate) fn add(&mut self, comp_types: Vec<CompType>) -> Result<(), &'static str> {
-        if comp_types.is_empty() {
-            return Ok(());
-        }
-        for ty in comp_types.iter() {
-            if ty.layout.size() == 0 {
-                return Err("zst");
-            }
-            if self.get_layout_and_offset(*ty).is_ok() {
-                return Err("repeated type");
+        let mut layout = self.total_layout;
+        for (index_in_vec, ty) in comp_types.into_iter().enumerate() {
+            let index = index_in_vec + self.len;
+            let (new_layout, offset_val) = layout.extend(ty.layout).unwrap();
+            let offset = Offset(offset_val);
+            layout = new_layout;
+            unsafe {
+                self.write_comptype(index, ty);
+                self.write_offset(index, offset);
             }
         }
 
-        let final_layout = self.total_layout;
-
-        let (with_generation_layout, generation_offset) = final_layout
-            .extend(Layout::new::<Generation>())
-            .or(Err("cannot extend"))?;
-        for ty in comp_types {
-            let (layout, offset) = final_layout.extend(ty.layout).or(Err("cannot extend"))?;
-            self.hashmap_layout_and_offsets.insert(ty, (layout, offset));
-        }
-        self.total_layout = final_layout;
-
+        self.total_layout = layout;
         Ok(())
     }
 
     pub(crate) fn new(mut comp_types: Vec<CompType>) -> Result<Self, &'static str> {
-        let mut val = Self::new_empty();
-        val.add(comp_types)?;
-        Ok(val)
+        let mut result = Self::new_empty();
+        result.add(comp_types)?;
+        Ok(result)
     }
 
-    pub(crate) fn total_layout(&self) -> Layout {
-        self.total_layout
+    unsafe fn get_raw(&self, index: usize) -> Result<(CompType, Offset), &'static str> {
+        if index >= self.len {
+            return Err("index overflow");
+        }
+        let unit_size = size_of::<CompType>() + size_of::<Offset>();
+        let comp_size = size_of::<CompType>();
+        let ptr_compty = self
+            .comp_type_followed_by_offset_ptr
+            .add(unit_size * index)
+            .cast::<CompType>()
+            .as_mut()
+            .unwrap()
+            .clone();
+        let ptr_offset = self
+            .comp_type_followed_by_offset_ptr
+            .add(unit_size * index + comp_size)
+            .cast::<Offset>()
+            .as_mut()
+            .unwrap()
+            .clone();
+
+        Ok((ptr_compty, ptr_offset))
     }
 
     pub(crate) fn get_layout_and_offset(
         &self,
         comp_type: CompType,
-    ) -> Result<(Layout, usize), &'static str> {
-        let result = self
-            .hashmap_layout_and_offsets
-            .get(&comp_type)
-            .ok_or("type not in this comp types")?
-            .clone();
-        Ok(result)
+    ) -> Result<(Layout, Offset), &'static str> {
+        for index in 0..self.len {
+            let value = unsafe { self.get_raw(index)? };
+            if comp_type == value.0 {
+                return Ok((value.0.layout, value.1));
+            }
+        }
+        Err("not found")
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.hashmap_layout_and_offsets.len()
+    // todo have to manually clean shit up
+    pub(crate) fn drop(self) {
+        unsafe { dealloc(self.comp_type_followed_by_offset_ptr, self.total_layout) }
     }
 }
 
-impl Hash for MultiCompType {
-    fn hash_slice<H: ~const std::hash::Hasher>(data: &[Self], state: &mut H)
-    where
-        Self: Sized,
-    {
-        //FIXME(const_trait_impl): revert to only a for loop
-        fn rt<T: Hash, H: std::hash::Hasher>(data: &[T], state: &mut H) {
-            for piece in data {
-                piece.hash(state)
-            }
+impl Clone for MultiCompType {
+    fn clone(&self) -> Self {
+        Self {
+            // todo fix this cloning method
+            comp_type_followed_by_offset_ptr: self.comp_type_followed_by_offset_ptr.clone(),
+            len: self.len.clone(),
+            total_layout: self.total_layout.clone(),
         }
-        const fn ct<T: ~const Hash, H: ~const std::hash::Hasher>(data: &[T], state: &mut H) {
-            let mut i = 0;
-            while i < data.len() {
-                data[i].hash(state);
-                i += 1;
-            }
-        }
-        // SAFETY: same behavior, CT just uses while instead of for
-        unsafe { std::intrinsics::const_eval_select((data, state), ct, rt) };
-    }
-
-    fn hash<H: ~const std::hash::Hasher>(&self, state: &mut H) {
-        // self.hashmap_layout_and_offsets.hash(state);
-        self.total_layout.hash(state);
     }
 }
 
@@ -482,7 +435,8 @@ impl MultiPtr {
                     self.comp_type
                         .get_layout_and_offset(GENERATION_COMPTYPE)
                         .unwrap()
-                        .1,
+                        .1
+                         .0,
                 )
                 .cast::<Generation>()
                 .as_ref()
@@ -596,7 +550,7 @@ pub(crate) struct SparseSet {
 impl SparseSet {
     pub(crate) fn new(comp_types: MultiCompType, size: usize) -> Self {
         let data_heap_ptr =
-            unsafe { std::alloc::alloc(comp_types.total_layout().repeat(size).unwrap().0) };
+            unsafe { std::alloc::alloc(comp_types.total_layout.repeat(size).unwrap().0) };
         Self {
             ty: comp_types,
             data_heap_ptr,
@@ -617,7 +571,7 @@ impl SparseSet {
         unsafe {
             Ok(self
                 .data_heap_ptr
-                .add(self.ty.total_layout().size() * dense_index.0 + offset))
+                .add(self.ty.total_layout.size() * dense_index.0 + offset.0))
         }
     }
 
@@ -636,7 +590,7 @@ impl SparseSet {
     fn get_sparse_index(&self, dense_index: usize) -> usize {
         unsafe {
             self.data_heap_ptr
-                .add(self.ty.total_layout().size() * dense_index)
+                .add(self.ty.total_layout.size() * dense_index)
                 .cast::<usize>()
                 .as_mut()
                 .unwrap()
@@ -718,8 +672,8 @@ impl SparseSet {
             return Err("trying to access gen/sparse index");
         }
         let dst_ptr = self.data_heap_ptr.add(
-            dense_index.0 * self.ty.total_layout().size()
-                + self.ty.get_layout_and_offset(owning_ptr.comp_type)?.1,
+            dense_index.0 * self.ty.total_layout.size()
+                + self.ty.get_layout_and_offset(owning_ptr.comp_type)?.1 .0,
         );
         std::ptr::copy(owning_ptr.ptr, dst_ptr, owning_ptr.comp_type.layout.size());
         Ok(self.generation_advance(dense_index))
@@ -733,7 +687,7 @@ impl SparseSet {
         let mut previous_gen = self.get_gen_dense(dense_index).clone();
         let dst_ptr = self
             .data_heap_ptr
-            .add(dense_index.0 * self.ty.total_layout().size());
+            .add(dense_index.0 * self.ty.total_layout.size());
         std::ptr::copy(owning_ptr.ptr, dst_ptr, self.ty.total_layout.size());
         let result_gen = previous_gen.advance();
         self.generation_write(dense_index, result_gen);
@@ -886,14 +840,14 @@ impl SparseSet {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
             .ty
-            .total_layout()
+            .total_layout
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = unsafe {
             std::alloc::realloc(
                 self.data_heap_ptr,
                 self.ty
-                    .total_layout()
+                    .total_layout
                     .repeat(self.capacity)
                     .expect("could not repeat layout")
                     .0,
