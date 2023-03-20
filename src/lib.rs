@@ -23,10 +23,8 @@ use std::{
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
-// todo refactor into a wrapper type for multiptr
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
-    // pub(crate) assigned_index: usize,
     pub(crate) sparse_index: SparseIndex,
     pub(crate) multiptr: MultiPtr,
 }
@@ -85,7 +83,6 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
 // all with the same id and and must have diff types
 #[derive(Clone)]
 pub struct AccessRow {
-    // not ordered; CONSIDER: turn it into a hash map where k:comp_type
     pub(crate) access_vec: Vec<TableCellAccess>,
     pub(crate) sparse_index: SparseIndex,
 }
@@ -712,10 +709,7 @@ impl SparseSet {
         }
     }
 
-    pub(crate) fn swap_remove(
-        &mut self,
-        sparse_index: SparseIndex,
-    ) -> Result<MultiValue, &'static str> {
+    pub(crate) fn remove(&mut self, sparse_index: SparseIndex) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
         self.sparse[sparse_index] = None;
         let result =
@@ -916,7 +910,7 @@ impl MultiTable {
             .ok_or("invalid row")?
             .pop(access.multiptr.comp_type.clone())?;
         self.try_column(access.multiptr.comp_type.clone())?
-            .swap_remove(access.sparse_index)
+            .remove(access.sparse_index)
     }
 
     pub(crate) fn replace_cell(
@@ -991,7 +985,7 @@ impl MultiTable {
 
         let result = self
             .try_column(from_key.multiptr.comp_type.clone())?
-            .swap_remove(to_key.sparse_index)?;
+            .remove(to_key.sparse_index)?;
         let access = self
             .try_column(from_key.multiptr.comp_type)?
             .move_value(from_key.sparse_index, to_key.sparse_index)?;
