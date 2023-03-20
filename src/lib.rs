@@ -833,15 +833,6 @@ impl<'a> Command<'a> {
     }
 
     pub fn add_component<C: Component>(&mut self, mut component: C) -> Ptr {
-        // let comp_type = C::get_id();
-        // let dst_entity_index = self.table.init_row();
-        // self.table
-        //     .push_cell(
-        //         dst_entity_index,
-        //         comp_type,
-        //         (&mut component as *mut C).cast::<u8>(),
-        //     )
-        //     .unwrap()
         todo!()
     }
 
@@ -851,42 +842,14 @@ impl<'a> Command<'a> {
         key: Ptr,
         mut component: C,
     ) -> Result<Ptr, &'static str> {
-        // let comp_type = C::get_id();
-        // // making sure they are different types
-        // if key.column_type() == comp_type {
-        //     return Err("type not matching");
-        // }
-        // let row = self.table.get_row(key.sparse_index())?;
-        // if row.get(comp_type).is_ok() {
-        //     return Err("type already exists in this row");
-        // } else {
-        //     let access = self.table.push_cell(
-        //         key.sparse_index(),
-        //         comp_type,
-        //         (&mut component as *mut C).cast::<u8>(),
-        //     )?;
-        //     Ok(access)
-        // }
         todo!()
     }
 
     pub fn remove_component<C: Component>(&mut self, key: Ptr) -> Result<C, &'static str> {
-        // if key.column_type() != C::get_id() {
-        //     return Err("type not matching");
-        // }
-        // let vec = self.table.pop_cell(key)?;
-        // // cast this vec into a component
-        // Ok(unsafe { vec.as_ptr().cast::<C>().as_ref().unwrap().clone() })
         todo!()
     }
 
     pub fn query<C: Component, F: Filter>(&mut self) -> AccessColumn {
-        // let column = self.table.get_column(C::comp_type());
-        // match column {
-        //     Ok(result) => <F as Filter>::apply_on(result[0], self.table),
-        //     // yield empty one
-        //     Err(error) => AccessColumn::new_empty(C::comp_type()),
-        // }
         todo!()
     }
 }
