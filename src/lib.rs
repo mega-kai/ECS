@@ -60,6 +60,7 @@ pub trait Component: Clone + 'static {
 
 //-----------------TYPE ERASED POINTER-----------------//
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// this is for content, not generation or sparse index
 pub(crate) struct Ptr {
     pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
@@ -399,22 +400,29 @@ impl SparseSet {
 
     //-----------------DENSE OPERATIONS-----------------//
 
-    pub(crate) unsafe fn read(&self, dense_index: DenseIndex) -> Ptr {
+    pub(crate) unsafe fn content_read(&self, dense_index: DenseIndex) -> Ptr {
         let ptr = self.get_dense_ptr_content(dense_index);
         let sparse = self.get_sparse_index(dense_index);
         Ptr::new(ptr, self.comp_type, sparse)
     }
 
-    pub(crate) unsafe fn copy(&self, dense_index: DenseIndex) -> Value {
-        self.read(dense_index).cast_value()
+    pub(crate) unsafe fn content_copy(&self, dense_index: DenseIndex) -> Value {
+        self.content_read(dense_index).cast_value()
     }
 
-    pub(crate) unsafe fn write(&self, dense_index: DenseIndex, owning_ptr: Ptr) -> Generation {
+    // just write content, no touching generation or sparse index
+    pub(crate) unsafe fn content_write(
+        &self,
+        dense_index: DenseIndex,
+        owning_ptr: Ptr,
+    ) -> Generation {
         let mut previous_gen = self.get_generation_dense(dense_index);
-        let dst_ptr = self
-            .data_heap_ptr
-            .add(dense_index.0 * self.comp_type.total_layout.size());
-        std::ptr::copy(owning_ptr.ptr, dst_ptr, self.comp_type.total_layout.size());
+        let content_ptr = self.get_dense_ptr_content(dense_index);
+        std::ptr::copy(
+            owning_ptr.ptr,
+            content_ptr,
+            self.comp_type.total_layout.size(),
+        );
         let result_gen = previous_gen.advance();
         self.generation_write(dense_index, result_gen);
         result_gen
@@ -425,8 +433,8 @@ impl SparseSet {
         dense_index: DenseIndex,
         ptrs: Ptr,
     ) -> Result<Value, &'static str> {
-        let result = self.copy(dense_index);
-        self.write(dense_index, ptrs);
+        let result = self.content_copy(dense_index);
+        self.content_write(dense_index, ptrs);
         Ok(result)
     }
 
@@ -461,8 +469,8 @@ impl SparseSet {
         self.sparse[sparse_index] = Some(len);
 
         unsafe {
-            let gen = self.write(len, ptrs);
-            let raw_dst_ptr = self.read(len);
+            let gen = self.content_write(len, ptrs);
+            let raw_dst_ptr = self.content_read(len);
             self.len += 1;
             Ok(Ptr::new(sparse_index, raw_dst_ptr))
         }
@@ -471,7 +479,8 @@ impl SparseSet {
     pub(crate) fn remove(&mut self, sparse_index: SparseIndex) -> Result<Value, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
         self.sparse[sparse_index] = None;
-        let result = unsafe { self.replace(dense_index, self.read(DenseIndex(self.len - 1)))? };
+        let result =
+            unsafe { self.replace(dense_index, self.content_read(DenseIndex(self.len - 1)))? };
         self.len -= 1;
         Ok(result)
     }
@@ -488,7 +497,9 @@ impl SparseSet {
             let dense_index = self.get_dense_index(from_index)?;
             self.sparse[to_index] = Some(dense_index);
             let gen = unsafe { self.generation_advance(dense_index) };
-            Ok(Ptr::new(to_index, unsafe { self.read(dense_index) }))
+            Ok(Ptr::new(to_index, unsafe {
+                self.content_read(dense_index)
+            }))
         }
     }
 
@@ -513,8 +524,8 @@ impl SparseSet {
         self.sparse[sparse_index1] = Some(dense_index2);
         self.sparse[sparse_index2] = Some(dense_index1);
         Ok((
-            Ptr::new(sparse_index1, unsafe { self.read(dense_index2) }),
-            Ptr::new(sparse_index2, unsafe { self.read(dense_index1) }),
+            Ptr::new(sparse_index1, unsafe { self.content_read(dense_index2) }),
+            Ptr::new(sparse_index2, unsafe { self.content_read(dense_index1) }),
         ))
     }
 
@@ -527,7 +538,7 @@ impl SparseSet {
         let mut result = PtrColumn::new_empty(self.comp_type);
         for index in 0..self.len {
             let dense_index = DenseIndex(index);
-            let ptrs = unsafe { self.read(dense_index) };
+            let ptrs = unsafe { self.content_read(dense_index) };
             result.push(ptrs.to_access());
         }
         result
