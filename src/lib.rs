@@ -287,10 +287,10 @@ pub(crate) struct SparseSet {
 }
 
 impl SparseSet {
-    pub(crate) fn new(comp_types: CompType, size: usize) -> Self {
-        let data_heap_ptr = unsafe { alloc(comp_types.total_layout.repeat(size).unwrap().0) };
+    pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
+        let data_heap_ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
-            ty: comp_types,
+            ty: comp_type,
             data_heap_ptr,
             capacity: size,
             len: 0,
@@ -300,20 +300,15 @@ impl SparseSet {
 
     //-----------------HELPERS-----------------//
     /// must ensure dense_index is valid first
-    fn get_dense_ptr(
-        &self,
-        dense_index: DenseIndex,
-        comp_type: CompType,
-    ) -> Result<*mut u8, &'static str> {
-        let (_, offset) = self.ty.get_layout_and_offset(comp_type)?;
-        unsafe {
-            Ok(self
-                .data_heap_ptr
-                .add(self.ty.total_layout.size() * dense_index.0 + offset.0))
-        }
+    unsafe fn get_dense_ptr(&self, dense_index: DenseIndex) -> *mut u8 {
+        self.data_heap_ptr
+            .add(self.ty.layout.size() * dense_index.0)
     }
 
-    fn get_dense_index(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
+    unsafe fn get_dense_index(
+        &self,
+        sparse_index: SparseIndex,
+    ) -> Result<DenseIndex, &'static str> {
         if sparse_index.0 >= self.sparse.len() {
             Err("index overflow")
         } else {
