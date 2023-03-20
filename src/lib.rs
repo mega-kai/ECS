@@ -401,15 +401,22 @@ impl SparseSet {
     }
 
     //-----------------ALLOCATION-----------------//
-    fn ensure_len(&mut self, sparse_index: SparseIndex) {
-        if sparse_index.0 >= self.sparse.len() {
-            self.sparse.resize(sparse_index.0 + 1);
-        }
-        if self.len >= self.capacity {
+    fn ensure_dense_cap(&mut self, extra_slots: usize) {
+        if self.capacity - self.len >= extra_slots {
             self.double_dense_cap();
+            self.ensure_dense_cap(extra_slots);
         }
     }
 
+    fn ensure_sparse_len(&mut self, sparse_index: SparseIndex) {
+        let len = self.sparse.0.len();
+        if len <= sparse_index.0 {
+            self.sparse.0.resize(len * 2, None);
+            self.ensure_sparse_len(sparse_index);
+        }
+    }
+
+    // todo drop trait
     fn double_dense_cap(&mut self) {
         let new_capacity = self.capacity * 2;
         let (new_layout_of_whole_vec, _) = self
