@@ -285,10 +285,16 @@ pub(crate) struct SparseSet {
     pub(crate) capacity: usize,
     pub(crate) len: usize,
     pub(crate) sparse: SparseVec,
+    // in bytes
+    generation_offset: usize,
+    content_offset: usize,
 }
 
 impl SparseSet {
     pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
+        let (layout, generation_offset) = Layout::new::<SparseIndex>()
+            .extend(Layout::new::<usize>())
+            .unwrap();
         let data_heap_ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
             comp_type,
