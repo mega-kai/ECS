@@ -416,7 +416,6 @@ impl MultiPtr {
     pub(crate) unsafe fn get_sparse_index(&self) -> SparseIndex {
         unsafe { self.ptr.cast::<SparseIndex>().as_ref().unwrap().clone() }
     }
-
     pub(crate) fn get_gen(&self) -> Generation {
         unsafe {
             self.ptr
