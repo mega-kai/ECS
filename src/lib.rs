@@ -376,14 +376,8 @@ impl MultiPtr {
         MultiValue::new(self.ptr, self.comp_type)
     }
 
-    pub(crate) unsafe fn get_sparse_index(&self) -> Option<SparseIndex> {
-        unsafe {
-            self.ptr
-                .cast::<Option<SparseIndex>>()
-                .as_ref()
-                .unwrap()
-                .clone()
-        }
+    pub(crate) unsafe fn get_sparse_index(&self) -> SparseIndex {
+        unsafe { self.ptr.cast::<SparseIndex>().as_ref().unwrap().clone() }
     }
 
     pub(crate) fn get_gen(&self) -> Generation {
@@ -402,16 +396,13 @@ impl MultiPtr {
         }
     }
 
-    pub(crate) fn to_access(self) -> Result<TableCellAccess, &'static str> {
-        Ok(TableCellAccess::new(
-            unsafe {
-                self.get_sparse_index()
-                    .ok_or("this dense index does not point to a valid sparse index")?
-            },
+    pub(crate) fn to_access(self) -> TableCellAccess {
+        TableCellAccess::new(
+            unsafe { self.get_sparse_index() },
             self.comp_type,
             self.ptr,
             self.get_gen(),
-        ))
+        )
     }
 }
 
@@ -820,11 +811,7 @@ impl SparseSet {
         for index in 0..self.len {
             let dense_index = DenseIndex(index);
             let ptrs = unsafe { self.read_multi(dense_index) };
-            if let Ok(access) = ptrs.to_access() {
-                result.push(access);
-            } else {
-                continue;
-            }
+            result.push(ptrs.to_access());
         }
         result
     }
@@ -974,7 +961,7 @@ impl MultiTable {
         self.row_type_cache
             .get_mut(&access.sparse_index)
             .ok_or("invalid row")?
-            .push(values.clone().to_access()?);
+            .push(values.clone().to_access());
         self.try_column(access.column_type)?
             .replace(access.sparse_index, values)
     }
@@ -990,6 +977,15 @@ impl MultiTable {
         if self.try_cell(from_key.column_type, to_index).is_ok() {
             return Err("cell not vacant");
         } else {
+            let access = self
+                .row_type_cache
+                .get_mut(&from_key.sparse_index)
+                .ok_or("invalid row")?
+                .pop(from_key.column_type)?;
+            self.row_type_cache
+                .get_mut(&to_index)
+                .ok_or("invalid row")?
+                .push(access)?;
             let result = self
                 .try_column(from_key.column_type)?
                 .try_insert(MultiPtr::new(from_key.ptr, from_key.column_type), to_index)?;
@@ -1004,10 +1000,19 @@ impl MultiTable {
         from_key: TableCellAccess,
         to_key: TableCellAccess,
     ) -> Result<(MultiValue, TableCellAccess), &'static str> {
-        // todo cache
         if from_key.column_type() != to_key.column_type() {
             return Err("not on the same column");
         }
+        let cached_access = self
+            .row_type_cache
+            .get_mut(&from_key.sparse_index)
+            .ok_or("invalid row")?
+            .pop(to_key.column_type)?;
+        self.row_type_cache
+            .get_mut(&to_key.sparse_index)
+            .ok_or("invalid row")?
+            .push(cached_access)?;
+
         let result = self
             .try_column(from_key.column_type)?
             .swap_remove(to_key.sparse_index)?;
