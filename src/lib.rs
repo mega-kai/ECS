@@ -227,24 +227,6 @@ impl PtrRow {
         self.data.is_empty()
     }
 }
-impl<'a> IntoIterator for &'a PtrRow {
-    type Item = &'a Ptr;
-
-    type IntoIter = std::slice::Iter<'a, Ptr>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.data.iter()
-    }
-}
-impl<'a> IntoIterator for &'a mut PtrRow {
-    type Item = &'a mut Ptr;
-
-    type IntoIter = std::slice::IterMut<'a, Ptr>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.data.iter_mut()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub(crate) struct Generation(usize);
