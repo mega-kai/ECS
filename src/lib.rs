@@ -15,7 +15,7 @@ use std::{
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
-// todo deprecated
+// todo refactor into a wrapper type for multiptr
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
     // pub(crate) assigned_index: usize,
@@ -846,7 +846,6 @@ pub struct MultiTable {
     bottom_sparse_index: SparseIndex,
 }
 
-// TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
 impl MultiTable {
@@ -1031,6 +1030,25 @@ impl MultiTable {
         if key1.column_type() != key2.column_type() {
             return Err("not on the same column");
         }
+        let cached_access1 = self
+            .row_type_cache
+            .get_mut(&key1.sparse_index)
+            .ok_or("invalid row")?
+            .pop(key1.column_type)?;
+        let cached_access2 = self
+            .row_type_cache
+            .get_mut(&key2.sparse_index)
+            .ok_or("invalid row")?
+            .pop(key1.column_type)?;
+        self.row_type_cache
+            .get_mut(&key1.sparse_index)
+            .ok_or("invalid row")?
+            .push(cached_access2)?;
+        self.row_type_cache
+            .get_mut(&key2.sparse_index)
+            .ok_or("invalid row")?
+            .push(cached_access1)?;
+
         // todo cache
         self.try_column(key1.column_type())?
             .swap_within(key1.sparse_index(), key2.sparse_index())
