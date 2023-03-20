@@ -279,22 +279,26 @@ impl IndexMut<SparseIndex> for SparseVec {
 
 //----------------SPARSE SET------------------//
 pub(crate) struct SparseSet {
+    sparse: SparseVec,
     comp_type: CompType,
+
+    capacity: usize,
+    len: usize,
+
     // first is sparse index, second is generation
     data_heap_ptr: *mut u8,
-    pub(crate) capacity: usize,
-    pub(crate) len: usize,
-    pub(crate) sparse: SparseVec,
     // in bytes
     generation_offset: usize,
     content_offset: usize,
+    total_layout: Layout,
 }
 
 impl SparseSet {
     pub(crate) fn new(comp_type: CompType, size: usize) -> Self {
-        let (layout, generation_offset) = Layout::new::<SparseIndex>()
+        let (generation_layout, generation_offset) = Layout::new::<SparseIndex>()
             .extend(Layout::new::<usize>())
             .unwrap();
+        let (total_layout, content_offset) = generation_layout.extend(comp_type.layout).unwrap();
         let data_heap_ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
             comp_type,
@@ -302,6 +306,9 @@ impl SparseSet {
             capacity: size,
             len: 0,
             sparse: SparseVec::new(size),
+            total_layout,
+            generation_offset,
+            content_offset,
         }
     }
 
