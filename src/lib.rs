@@ -313,11 +313,6 @@ impl SparseSet {
     }
 
     //-----------------HELPERS-----------------//
-    /// must ensure dense_index is valid first
-    unsafe fn get_dense_ptr(&self, dense_index: DenseIndex) -> *mut u8 {
-        self.data_heap_ptr
-            .add(self.comp_type.layout.size() * dense_index.0)
-    }
 
     fn get_dense_index(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
         if sparse_index.0 >= self.sparse.len() {
@@ -331,76 +326,91 @@ impl SparseSet {
         }
     }
 
+    unsafe fn get_dense_ptr_sparse(&self, dense_index: DenseIndex) -> *mut u8 {
+        self.data_heap_ptr
+            .add(self.comp_type.layout.size() * dense_index.0)
+    }
+
+    unsafe fn get_dense_ptr_generation(&self, dense_index: DenseIndex) -> *mut u8 {
+        self.data_heap_ptr
+            .add(self.comp_type.layout.size() * dense_index.0 + self.generation_offset)
+    }
+
+    unsafe fn get_dense_ptr_content(&self, dense_index: DenseIndex) -> *mut u8 {
+        self.data_heap_ptr
+            .add(self.comp_type.layout.size() * dense_index.0 + self.content_offset)
+    }
+
     unsafe fn get_sparse_index(&self, dense_index: DenseIndex) -> SparseIndex {
-        unsafe {
-            self.data_heap_ptr
-                .add(self.comp_type.layout.size() * dense_index.0)
-                .cast::<SparseIndex>()
-                .as_mut()
-                .unwrap()
-                .clone()
-        }
+        self.get_dense_ptr_sparse(dense_index)
+            .cast::<SparseIndex>()
+            .as_mut()
+            .unwrap()
+            .clone()
     }
 
-    pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
-        self.get_dense_index(sparse_index).is_ok()
-    }
-
-    //-----------------GENERATION OPERATIONS-----------------//
     pub(crate) fn get_gen_sparse(
         &self,
         sparse_index: SparseIndex,
     ) -> Result<Generation, &'static str> {
-        let dense_index = self.get_dense_index(sparse_index)?;
         unsafe {
-            self.copy(dense_index, GENERATION_COMPTYPE)?
+            Ok(self
+                .get_dense_ptr_generation(self.get_dense_index(sparse_index)?)
                 .cast::<Generation>()
+                .as_mut()
+                .unwrap()
+                .clone())
         }
     }
 
-    unsafe fn get_gen_dense(&self, dense_index: DenseIndex) -> Ptr {
-        self.read_single(dense_index, CompType::new::<Generation>())
+    unsafe fn get_generation_dense(&self, dense_index: DenseIndex) -> Generation {
+        self.get_dense_ptr_generation(dense_index)
+            .cast::<Generation>()
+            .as_mut()
             .unwrap()
+            .clone()
     }
 
     unsafe fn generation_advance(&self, dense_index: DenseIndex) -> Generation {
-        let ptr = self.get_gen_dense(dense_index);
-        ptr.cast::<Generation>().unwrap().advance()
+        let ptr = self.get_dense_ptr_generation(dense_index);
+        ptr.cast::<Generation>().as_mut().unwrap().advance()
     }
 
     unsafe fn generation_clear(&self, dense_index: DenseIndex) {
-        self.get_gen_dense(dense_index)
+        self.get_dense_ptr_generation(dense_index)
             .cast::<Generation>()
+            .as_mut()
             .unwrap()
             .clear();
     }
 
     unsafe fn generation_write(&self, dense_index: DenseIndex, gen: Generation) {
         *self
-            .get_gen_dense(dense_index)
+            .get_dense_ptr_generation(dense_index)
             .cast::<Generation>()
+            // todo as ref wouldn't work here
+            .as_ref()
             .unwrap() = gen;
+    }
+
+    pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
+        self.get_dense_index(sparse_index).is_ok()
     }
 
     //-----------------DENSE OPERATIONS-----------------//
 
     pub(crate) unsafe fn read(&self, dense_index: DenseIndex) -> Ptr {
-        let ptr = self
-            .data_heap_ptr
-            .add(dense_index.0 * self.comp_type.total_layout.size());
-        Ptr::new(ptr, self.comp_type)
+        let ptr = self.get_dense_ptr_content(dense_index);
+        let sparse = self.get_sparse_index(dense_index);
+        Ptr::new(ptr, self.comp_type, sparse)
     }
 
     pub(crate) unsafe fn copy(&self, dense_index: DenseIndex) -> Value {
-        self.read(dense_index).cast_multi_value()
+        self.read(dense_index).cast_value()
     }
 
     pub(crate) unsafe fn write(&self, dense_index: DenseIndex, owning_ptr: Ptr) -> Generation {
-        let mut previous_gen = self
-            .get_gen_dense(dense_index)
-            .cast::<Generation>()
-            .unwrap()
-            .clone();
+        let mut previous_gen = self.get_generation_dense(dense_index);
         let dst_ptr = self
             .data_heap_ptr
             .add(dense_index.0 * self.comp_type.total_layout.size());
@@ -410,7 +420,7 @@ impl SparseSet {
         result_gen
     }
 
-    pub(crate) unsafe fn replace_multi(
+    pub(crate) unsafe fn replace_(
         &self,
         dense_index: DenseIndex,
         ptrs: Ptr,
@@ -461,8 +471,7 @@ impl SparseSet {
     pub(crate) fn remove(&mut self, sparse_index: SparseIndex) -> Result<Value, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
         self.sparse[sparse_index] = None;
-        let result =
-            unsafe { self.replace_multi(dense_index, self.read(DenseIndex(self.len - 1)))? };
+        let result = unsafe { self.replace(dense_index, self.read(DenseIndex(self.len - 1)))? };
         self.len -= 1;
         Ok(result)
     }
@@ -488,7 +497,7 @@ impl SparseSet {
         sparse_index: SparseIndex,
         ptrs: Ptr,
     ) -> Result<Value, &'static str> {
-        unsafe { self.replace_multi(self.get_dense_index(sparse_index)?, ptrs) }
+        unsafe { self.replace(self.get_dense_index(sparse_index)?, ptrs) }
     }
 
     // shallow swap of two valid cells
