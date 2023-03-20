@@ -356,10 +356,7 @@ impl SparseSet {
     ) -> Result<Generation, &'static str> {
         unsafe {
             Ok(self
-                .get_dense_ptr_generation(self.get_dense_index(sparse_index)?)
-                .cast::<Generation>()
-                .as_mut()
-                .unwrap()
+                .get_generation_dense(self.get_dense_index(sparse_index)?)
                 .clone())
         }
     }
@@ -411,31 +408,15 @@ impl SparseSet {
     }
 
     // just write content, no touching generation or sparse index
-    pub(crate) unsafe fn content_write(
-        &self,
-        dense_index: DenseIndex,
-        owning_ptr: Ptr,
-    ) -> Generation {
-        let mut previous_gen = self.get_generation_dense(dense_index);
+    pub(crate) unsafe fn content_write(&self, dense_index: DenseIndex, ptr: Ptr) {
         let content_ptr = self.get_dense_ptr_content(dense_index);
-        std::ptr::copy(
-            owning_ptr.ptr,
-            content_ptr,
-            self.comp_type.total_layout.size(),
-        );
-        let result_gen = previous_gen.advance();
-        self.generation_write(dense_index, result_gen);
-        result_gen
+        copy(ptr.ptr, content_ptr, self.comp_type.layout.size())
     }
 
-    pub(crate) unsafe fn replace_(
-        &self,
-        dense_index: DenseIndex,
-        ptrs: Ptr,
-    ) -> Result<Value, &'static str> {
+    pub(crate) unsafe fn content_replace(&self, dense_index: DenseIndex, ptrs: Ptr) -> Value {
         let result = self.content_copy(dense_index);
         self.content_write(dense_index, ptrs);
-        Ok(result)
+        result
     }
 
     //-----------------SPARSE OPERATIONS-----------------//
