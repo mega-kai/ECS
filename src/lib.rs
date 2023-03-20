@@ -112,10 +112,15 @@ impl AccessRow {
         }
     }
 
-    pub(crate) fn get_access_from_type(
-        &self,
-        comp_type: MultiCompType,
-    ) -> Result<TableCellAccess, &'static str> {
+    pub(crate) fn push(&mut self, access: TableCellAccess) -> Result<(), &'static str> {
+        if self.get(access.column_type).is_ok() {
+            return Err("type duplicated");
+        }
+        self.access_vec.push(access);
+        Ok(())
+    }
+
+    pub(crate) fn get(&self, comp_type: MultiCompType) -> Result<TableCellAccess, &'static str> {
         let mut counter: usize = 0;
         let mut final_index: usize = 0;
         for (index, access) in self.into_iter().enumerate() {
@@ -131,19 +136,42 @@ impl AccessRow {
         }
     }
 
-    pub(crate) fn contains_access(&self, key: TableCellAccess) -> bool {
-        self.access_vec.contains(&key)
+    pub(crate) fn pop(&self, comp_type: MultiCompType) -> Result<TableCellAccess, &'static str> {
+        let mut counter: usize = 0;
+        let mut final_index: usize = 0;
+        for (index, access) in self.into_iter().enumerate() {
+            if access.column_type() == comp_type {
+                counter += 1;
+                final_index = index;
+            }
+        }
+        match counter {
+            0 => Err("zero of this type in this row"),
+            1 => {
+                let result = Ok(self.access_vec[final_index].clone());
+                self.access_vec.swap_remove(final_index);
+                result
+            }
+            _ => Err("more than one of this type in this row"),
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.access_vec.is_empty()
     }
 
+    pub(crate) fn contains_access(&self, key: TableCellAccess) -> bool {
+        if key.sparse_index != self.sparse_index {
+            return false;
+        }
+        self.access_vec.contains(&key)
+    }
+
     pub(crate) fn get_current_generation(
         &self,
         comp_type: MultiCompType,
     ) -> Result<Generation, &'static str> {
-        Ok(self.get_access_from_type(comp_type)?.generation)
+        Ok(self.get(comp_type)?.generation)
     }
 }
 impl<'a> IntoIterator for &'a AccessRow {
@@ -334,6 +362,7 @@ impl Ptr {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct MultiPtr {
     ptr: *mut u8,
     comp_type: MultiCompType,
@@ -653,8 +682,8 @@ impl SparseSet {
 
     pub(crate) unsafe fn replace_multi(
         &self,
-        ptrs: MultiPtr,
         dense_index: DenseIndex,
+        ptrs: MultiPtr,
     ) -> Result<MultiValue, &'static str> {
         let result = self.copy_multi(dense_index);
         self.write_multi(dense_index, ptrs);
@@ -704,11 +733,16 @@ impl SparseSet {
         }
     }
 
-    pub(crate) fn remove(&mut self, sparse_index: SparseIndex) -> Result<MultiValue, &'static str> {
+    pub(crate) fn swap_remove(
+        &mut self,
+        sparse_index: SparseIndex,
+    ) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
         self.sparse[sparse_index] = None;
-        let val = unsafe { self.read_multi(dense_index).cast_multi_value() };
-        Ok(val)
+        let result =
+            unsafe { self.replace_multi(dense_index, self.read_multi(DenseIndex(self.len - 1)))? };
+        self.len -= 1;
+        Ok(result)
     }
 
     // shallow move
@@ -737,7 +771,7 @@ impl SparseSet {
         sparse_index: SparseIndex,
         ptrs: MultiPtr,
     ) -> Result<MultiValue, &'static str> {
-        unsafe { self.replace_multi(ptrs, self.get_dense_index(sparse_index)?) }
+        unsafe { self.replace_multi(self.get_dense_index(sparse_index)?, ptrs) }
     }
 
     // shallow swap of two valid cells
@@ -909,27 +943,40 @@ impl MultiTable {
         sparse_index: SparseIndex,
         values: MultiPtr,
     ) -> Result<TableCellAccess, &'static str> {
-        // todo cache
-        self.ensure_column(values.comp_type)
-            .try_insert(values, sparse_index)
+        let result = self
+            .ensure_column(values.comp_type)
+            .try_insert(values, sparse_index)?;
+        self.row_type_cache
+            .get_mut(&sparse_index)
+            .ok_or("invalid row")?
+            .push(result.clone())?;
+        Ok(result)
     }
 
     pub(crate) fn pop_cell(&mut self, access: TableCellAccess) -> Result<MultiValue, &'static str> {
-        // todo cache
+        self.row_type_cache
+            .get_mut(&access.sparse_index)
+            .ok_or("invalid row")?
+            .pop(access.column_type)?;
         self.try_column(access.column_type)?
-            .remove(access.sparse_index)
+            .swap_remove(access.sparse_index)
     }
 
-    /// write and return the old one in a series of bytes in a vector
-    /// it is on the caller to ensure they are the same type, else it's UB
     pub(crate) fn replace_cell(
         &mut self,
-        key: TableCellAccess,
+        access: TableCellAccess,
         values: MultiPtr,
     ) -> Result<MultiValue, &'static str> {
-        // todo cache
-        self.try_column(key.column_type)?
-            .replace(key.sparse_index, values)
+        self.row_type_cache
+            .get_mut(&access.sparse_index)
+            .ok_or("invalid row")?
+            .pop(access.column_type)?;
+        self.row_type_cache
+            .get_mut(&access.sparse_index)
+            .ok_or("invalid row")?
+            .push(values.clone().to_access()?);
+        self.try_column(access.column_type)?
+            .replace(access.sparse_index, values)
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
@@ -963,7 +1010,7 @@ impl MultiTable {
         }
         let result = self
             .try_column(from_key.column_type)?
-            .remove(to_key.sparse_index)?;
+            .swap_remove(to_key.sparse_index)?;
         let access = self
             .try_column(from_key.column_type)?
             .move_value(from_key.sparse_index, to_key.sparse_index)?;
@@ -1001,7 +1048,7 @@ impl<FilterComp: Component> With<FilterComp> {
             if table
                 .get_row(x.sparse_index())
                 .unwrap()
-                .get_access_from_type(FilterComp::get_id())
+                .get(FilterComp::get_id())
                 .is_ok()
             {
                 return true;
@@ -1022,7 +1069,7 @@ impl<FilterComp: Component> Without<FilterComp> {
             if table
                 .get_row(x.sparse_index())
                 .unwrap()
-                .get_access_from_type(FilterComp::get_id())
+                .get(FilterComp::get_id())
                 .is_ok()
             {
                 return false;
@@ -1086,7 +1133,7 @@ impl<'a> Command<'a> {
             return Err("type not matching");
         }
         let row = self.table.get_row(key.sparse_index())?;
-        if row.get_access_from_type(comp_type).is_ok() {
+        if row.get(comp_type).is_ok() {
             return Err("type already exists in this row");
         } else {
             let access = self.table.push_cell(
