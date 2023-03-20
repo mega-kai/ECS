@@ -327,27 +327,19 @@ impl SparseSet {
         }
     }
 
-    unsafe fn get_dense_ptr_sparse(&self, dense_index: DenseIndex) -> *mut u8 {
+    unsafe fn get_ptr_sparse(&self, dense_index: DenseIndex) -> *mut u8 {
         self.data_heap_ptr
             .add(self.comp_type.layout.size() * dense_index.0)
     }
 
-    unsafe fn get_dense_ptr_generation(&self, dense_index: DenseIndex) -> *mut u8 {
+    unsafe fn get_ptr_gen(&self, dense_index: DenseIndex) -> *mut u8 {
         self.data_heap_ptr
             .add(self.comp_type.layout.size() * dense_index.0 + self.generation_offset)
     }
 
-    unsafe fn get_dense_ptr_content(&self, dense_index: DenseIndex) -> *mut u8 {
+    unsafe fn get_ptr_content(&self, dense_index: DenseIndex) -> *mut u8 {
         self.data_heap_ptr
             .add(self.comp_type.layout.size() * dense_index.0 + self.content_offset)
-    }
-
-    unsafe fn get_sparse_index(&self, dense_index: DenseIndex) -> SparseIndex {
-        self.get_dense_ptr_sparse(dense_index)
-            .cast::<SparseIndex>()
-            .as_mut()
-            .unwrap()
-            .clone()
     }
 
     pub(crate) fn get_gen_sparse(
@@ -356,70 +348,84 @@ impl SparseSet {
     ) -> Result<Generation, &'static str> {
         unsafe {
             Ok(self
-                .get_generation_dense(self.get_dense_index(sparse_index)?)
+                .get_gen_dense(self.get_dense_index(sparse_index)?)
                 .clone())
         }
     }
 
-    unsafe fn get_generation_dense(&self, dense_index: DenseIndex) -> Generation {
-        self.get_dense_ptr_generation(dense_index)
+    unsafe fn get_gen_dense(&self, dense_index: DenseIndex) -> Generation {
+        self.get_ptr_gen(dense_index)
             .cast::<Generation>()
             .as_mut()
             .unwrap()
             .clone()
     }
 
-    unsafe fn generation_advance(&self, dense_index: DenseIndex) -> Generation {
-        let ptr = self.get_dense_ptr_generation(dense_index);
+    unsafe fn gen_advance(&self, dense_index: DenseIndex) -> Generation {
+        let ptr = self.get_ptr_gen(dense_index);
         ptr.cast::<Generation>().as_mut().unwrap().advance()
     }
 
-    unsafe fn generation_clear(&self, dense_index: DenseIndex) {
-        self.get_dense_ptr_generation(dense_index)
+    unsafe fn gen_clear(&self, dense_index: DenseIndex) {
+        self.get_ptr_gen(dense_index)
             .cast::<Generation>()
             .as_mut()
             .unwrap()
             .clear();
     }
 
-    unsafe fn generation_write(&self, dense_index: DenseIndex, gen: Generation) {
+    unsafe fn gen_write(&self, dense_index: DenseIndex, gen: Generation) {
         *self
-            .get_dense_ptr_generation(dense_index)
+            .get_ptr_gen(dense_index)
             .cast::<Generation>()
             // todo as ref wouldn't work here
             .as_ref()
             .unwrap() = gen;
     }
 
-    pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
-        self.get_dense_index(sparse_index).is_ok()
+    unsafe fn sparse_read(&self, dense_index: DenseIndex) -> SparseIndex {
+        self.get_ptr_sparse(dense_index)
+            .cast::<SparseIndex>()
+            .as_mut()
+            .unwrap()
+            .clone()
     }
 
-    //-----------------DENSE OPERATIONS-----------------//
+    unsafe fn sparse_write(&self, dense_index: DenseIndex, sparse_index: SparseIndex) {
+        *self
+            .get_ptr_sparse(dense_index)
+            .cast::<SparseIndex>()
+            .as_mut()
+            .unwrap() = sparse_index;
+    }
 
-    pub(crate) unsafe fn content_read(&self, dense_index: DenseIndex) -> Ptr {
-        let ptr = self.get_dense_ptr_content(dense_index);
-        let sparse = self.get_sparse_index(dense_index);
+    unsafe fn content_read(&self, dense_index: DenseIndex) -> Ptr {
+        let ptr = self.get_ptr_content(dense_index);
+        let sparse = self.sparse_read(dense_index);
         Ptr::new(ptr, self.comp_type, sparse)
     }
 
-    pub(crate) unsafe fn content_copy(&self, dense_index: DenseIndex) -> Value {
+    unsafe fn content_copy(&self, dense_index: DenseIndex) -> Value {
         self.content_read(dense_index).cast_value()
     }
 
     // just write content, no touching generation or sparse index
-    pub(crate) unsafe fn content_write(&self, dense_index: DenseIndex, ptr: Ptr) {
-        let content_ptr = self.get_dense_ptr_content(dense_index);
+    unsafe fn content_write(&self, dense_index: DenseIndex, ptr: Ptr) {
+        let content_ptr = self.get_ptr_content(dense_index);
         copy(ptr.ptr, content_ptr, self.comp_type.layout.size())
     }
 
-    pub(crate) unsafe fn content_replace(&self, dense_index: DenseIndex, ptrs: Ptr) -> Value {
+    unsafe fn content_replace(&self, dense_index: DenseIndex, ptrs: Ptr) -> Value {
         let result = self.content_copy(dense_index);
         self.content_write(dense_index, ptrs);
         result
     }
 
     //-----------------SPARSE OPERATIONS-----------------//
+
+    pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
+        self.get_dense_index(sparse_index).is_ok()
+    }
 
     pub(crate) fn ensure_len(&mut self, sparse_index: SparseIndex) {
         if sparse_index.0 >= self.sparse.len() {
@@ -477,7 +483,7 @@ impl SparseSet {
         } else {
             let dense_index = self.get_dense_index(from_index)?;
             self.sparse[to_index] = Some(dense_index);
-            let gen = unsafe { self.generation_advance(dense_index) };
+            let gen = unsafe { self.gen_advance(dense_index) };
             Ok(Ptr::new(to_index, unsafe {
                 self.content_read(dense_index)
             }))
@@ -499,9 +505,9 @@ impl SparseSet {
         sparse_index2: SparseIndex,
     ) -> Result<(Ptr, Ptr), &'static str> {
         let dense_index1 = self.get_dense_index(sparse_index1)?;
-        let gen1 = unsafe { self.generation_advance(dense_index1) };
+        let gen1 = unsafe { self.gen_advance(dense_index1) };
         let dense_index2 = self.get_dense_index(sparse_index2)?;
-        let gen2 = unsafe { self.generation_advance(dense_index2) };
+        let gen2 = unsafe { self.gen_advance(dense_index2) };
         self.sparse[sparse_index1] = Some(dense_index2);
         self.sparse[sparse_index2] = Some(dense_index1);
         Ok((
