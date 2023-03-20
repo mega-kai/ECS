@@ -48,10 +48,16 @@ impl TableCellAccess {
 
 // all with the same component type
 #[derive(Clone)]
-pub struct AccessColumn(pub(crate) Vec<TableCellAccess>, pub(crate) MultiCompType);
+pub struct AccessColumn {
+    pub(crate) vec: Vec<TableCellAccess>,
+    pub(crate) comp_type: MultiCompType,
+}
 impl AccessColumn {
     pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
-        Self(vec![], comp_type)
+        Self {
+            vec: vec![],
+            comp_type,
+        }
     }
 
     pub fn cast_vec<C: Component>(&self) -> Vec<&mut C> {
@@ -62,7 +68,7 @@ impl AccessColumn {
             .collect::<Vec<&mut C>>()
     }
     pub(crate) fn push(&mut self, access: TableCellAccess) {
-        self.0.push(access)
+        self.vec.push(access)
     }
 }
 impl<'a> IntoIterator for &'a AccessColumn {
@@ -71,7 +77,7 @@ impl<'a> IntoIterator for &'a AccessColumn {
     type IntoIter = std::slice::Iter<'a, TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.vec.iter()
     }
 }
 impl<'a> IntoIterator for &'a mut AccessColumn {
@@ -80,7 +86,7 @@ impl<'a> IntoIterator for &'a mut AccessColumn {
     type IntoIter = std::slice::IterMut<'a, TableCellAccess>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
+        self.vec.iter_mut()
     }
 }
 
@@ -705,6 +711,7 @@ impl SparseSet {
         Ok(val)
     }
 
+    // shallow move
     pub(crate) fn move_value(
         &mut self,
         from_index: SparseIndex,
@@ -733,7 +740,7 @@ impl SparseSet {
         unsafe { self.replace_multi(ptrs, self.get_dense_index(sparse_index)?) }
     }
 
-    // "shallow swap" of two valid cells
+    // shallow swap of two valid cells
     pub(crate) fn swap_within(
         &mut self,
         sparse_index1: SparseIndex,
