@@ -34,6 +34,86 @@ use std::{
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
+//-----------------COMPONENT TYPE-----------------//
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompType {
+    pub(crate) type_id: TypeId,
+    pub(crate) layout: Layout,
+}
+impl CompType {
+    pub(crate) const fn new<C: 'static>() -> Self {
+        Self {
+            type_id: TypeId::of::<C>(),
+            layout: Layout::new::<C>(),
+        }
+    }
+}
+
+pub trait Component: Clone + 'static {
+    fn get_id() -> CompType {
+        CompType {
+            type_id: TypeId::of::<Self>(),
+            layout: Layout::new::<Self>(),
+        }
+    }
+}
+
+//-----------------TYPE ERASED POINTER-----------------//
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Ptr {
+    pub(crate) ptr: *mut u8,
+    pub(crate) comp_type: CompType,
+}
+impl Ptr {
+    pub(crate) fn new(ptr: *mut u8, comp_type: CompType) -> Self {
+        Self { ptr, comp_type }
+    }
+
+    pub(crate) fn cast_value(self) -> Value {
+        Value::new(self.ptr, self.comp_type)
+    }
+
+    pub(crate) unsafe fn cast<T: 'static>(&self) -> Result<&mut T, &'static str> {
+        if CompType::new::<T>() != self.comp_type {
+            return Err("type not matching");
+        } else {
+            Ok(self.ptr.cast::<T>().as_mut().ok_or("casting failure")?)
+        }
+    }
+}
+
+//-----------------TYPE ERASED VALUE-----------------//
+pub(crate) struct Value {
+    pub(crate) ptr: *mut u8,
+    pub(crate) comp_type: CompType,
+}
+impl Value {
+    pub(crate) fn new(src_ptr: *mut u8, comp_type: CompType) -> Self {
+        unsafe {
+            let ptr = std::alloc::alloc(comp_type.layout);
+            std::ptr::copy(src_ptr, ptr, comp_type.layout.size());
+            Self { ptr, comp_type }
+        }
+    }
+
+    pub(crate) unsafe fn cast<T: 'static + Clone>(self) -> Result<T, &'static str> {
+        if self.comp_type != CompType::new::<T>() {
+            return Err("type not matching");
+        } else {
+            Ok(self.ptr.cast::<T>().as_ref().unwrap().clone())
+        }
+    }
+}
+
+impl Drop for Value {
+    fn drop(&mut self) {
+        unsafe {
+            std::alloc::dealloc(self.ptr, self.comp_type.layout);
+        }
+    }
+}
+
+//-----------------TYPE ERASED PTR COLUMN/ROW-----------------//
 // all with the same component type
 #[derive(Clone)]
 pub struct AccessColumn {
@@ -173,29 +253,6 @@ impl<'a> IntoIterator for &'a mut AccessRow {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CompType {
-    pub(crate) type_id: TypeId,
-    pub(crate) layout: Layout,
-}
-impl CompType {
-    pub(crate) const fn new<C: 'static>() -> Self {
-        Self {
-            type_id: TypeId::of::<C>(),
-            layout: Layout::new::<C>(),
-        }
-    }
-}
-
-pub trait Component: Clone + 'static {
-    fn get_id() -> CompType {
-        CompType {
-            type_id: TypeId::of::<Self>(),
-            layout: Layout::new::<Self>(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub(crate) struct Generation(usize);
 impl Generation {
@@ -209,66 +266,12 @@ impl Generation {
     }
 }
 
-//-----------------TYPE ERASED POINTER-----------------//
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Ptr {
-    pub(crate) ptr: *mut u8,
-    pub(crate) comp_type: CompType,
-}
-impl Ptr {
-    pub(crate) fn new(ptr: *mut u8, comp_type: CompType) -> Self {
-        Self { ptr, comp_type }
-    }
-
-    pub(crate) fn cast_value(self) -> Value {
-        Value::new(self.ptr, self.comp_type)
-    }
-
-    pub(crate) unsafe fn cast<T: 'static>(&self) -> Result<&mut T, &'static str> {
-        if CompType::new::<T>() != self.comp_type {
-            return Err("type not matching");
-        } else {
-            Ok(self.ptr.cast::<T>().as_mut().ok_or("casting failure")?)
-        }
-    }
-}
-
-//-----------------TYPE ERASED VALUE-----------------//
-pub(crate) struct Value {
-    pub(crate) ptr: *mut u8,
-    pub(crate) comp_type: CompType,
-}
-impl Value {
-    pub(crate) fn new(src_ptr: *mut u8, comp_type: CompType) -> Self {
-        unsafe {
-            let ptr = std::alloc::alloc(comp_type.layout);
-            std::ptr::copy(src_ptr, ptr, comp_type.layout.size());
-            Self { ptr, comp_type }
-        }
-    }
-
-    pub(crate) unsafe fn cast<T: 'static + Clone>(self) -> Result<T, &'static str> {
-        if self.comp_type != CompType::new::<T>() {
-            return Err("type not matching");
-        } else {
-            Ok(self.ptr.cast::<T>().as_ref().unwrap().clone())
-        }
-    }
-}
-
-impl Drop for Value {
-    fn drop(&mut self) {
-        unsafe {
-            std::alloc::dealloc(self.ptr, self.comp_type.layout);
-        }
-    }
-}
+//-----------------SPARSE/DENSE INDEX-----------------//
+#[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
+pub(crate) struct SparseIndex(usize);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
 pub(crate) struct DenseIndex(usize);
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
-pub(crate) struct SparseIndex(usize);
 
 pub(crate) struct SparseVec(Vec<Option<DenseIndex>>);
 impl SparseVec {
