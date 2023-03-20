@@ -589,7 +589,8 @@ impl SparseSet {
         let ptr = self
             .read_single(dense_index, CompType::new::<Generation>())
             .unwrap();
-        ptr.cast::<Generation>().unwrap()
+        // ptr.cast::<Generation>().unwrap()
+        todo!()
     }
 
     pub(crate) unsafe fn generation_advance(&self, dense_index: DenseIndex) -> Generation {
@@ -972,7 +973,7 @@ impl MultiTable {
         self.row_type_cache
             .get_mut(&access.sparse_index)
             .ok_or("invalid row")?
-            .push(values.clone().to_access());
+            .push(values.clone().to_access())?;
         self.try_column(access.column_type)?
             .replace(access.sparse_index, values)
     }
@@ -1004,7 +1005,7 @@ impl MultiTable {
                 MultiPtr::new(from_key.ptr, from_key.column_type.clone()),
                 to_index,
             )?;
-            self.pop_cell(from_key);
+            self.pop_cell(from_key)?;
             Ok(result)
         }
     }
