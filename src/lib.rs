@@ -15,6 +15,7 @@ use std::{
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
+// todo deprecated
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCellAccess {
     // pub(crate) assigned_index: usize,
@@ -47,9 +48,9 @@ impl TableCellAccess {
 
 // all with the same component type
 #[derive(Clone)]
-pub struct AccessColumn(pub(crate) Vec<TableCellAccess>, pub(crate) CompType);
+pub struct AccessColumn(pub(crate) Vec<TableCellAccess>, pub(crate) MultiCompType);
 impl AccessColumn {
-    pub(crate) fn new_empty(comp_type: CompType) -> Self {
+    pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
         Self(vec![], comp_type)
     }
 
@@ -59,6 +60,9 @@ impl AccessColumn {
         self.into_iter()
             .map(|x| unsafe { x.ptr.cast::<C>().as_mut().unwrap() })
             .collect::<Vec<&mut C>>()
+    }
+    pub(crate) fn push(&mut self, access: TableCellAccess) {
+        self.0.push(access)
     }
 }
 impl<'a> IntoIterator for &'a AccessColumn {
@@ -312,11 +316,7 @@ impl Ptr {
     }
 
     pub(crate) fn cast_value(self) -> Value {
-        let mut result = Value::new_empty(self.comp_type);
-        unsafe {
-            result.write(self.ptr);
-        }
-        result
+        Value::new(self.ptr, self.comp_type)
     }
 
     pub(crate) unsafe fn cast<T>(&self) -> Result<&mut T, &'static str> {
@@ -338,15 +338,17 @@ impl MultiPtr {
     }
 
     pub(crate) fn cast_multi_value(self) -> MultiValue {
-        let mut result = MultiValue::new_empty(self.comp_type);
-        unsafe {
-            result.write(self.ptr);
-        }
-        result
+        MultiValue::new(self.ptr, self.comp_type)
     }
 
-    pub(crate) fn get_sparse_index(&self) -> Option<usize> {
-        unsafe { self.ptr.cast::<Option<usize>>().as_ref().unwrap().clone() }
+    pub(crate) unsafe fn get_sparse_index(&self) -> Option<SparseIndex> {
+        unsafe {
+            self.ptr
+                .cast::<Option<SparseIndex>>()
+                .as_ref()
+                .unwrap()
+                .clone()
+        }
     }
 
     pub(crate) fn get_gen(&self) -> Generation {
@@ -364,62 +366,74 @@ impl MultiPtr {
                 .clone()
         }
     }
+
+    pub(crate) fn to_access(self) -> Result<TableCellAccess, &'static str> {
+        Ok(TableCellAccess::new(
+            unsafe {
+                self.get_sparse_index()
+                    .ok_or("this dense index does not point to a valid sparse index")?
+            },
+            self.comp_type,
+            self.ptr,
+            self.get_gen(),
+        ))
+    }
 }
+
 //-----------------TYPE ERASED VALUES-----------------//
-// todo refactor this into a allocated ptr on heap with drop trait deallocating it
 pub(crate) struct Value {
-    pub(crate) val: Vec<u8>,
+    pub(crate) ptr: *mut u8,
     pub(crate) comp_type: CompType,
 }
 impl Value {
-    pub(crate) fn new_empty(comp_type: CompType) -> Self {
-        Self {
-            val: vec![0u8; comp_type.layout.size()],
-            comp_type,
+    pub(crate) fn new(src_ptr: *mut u8, comp_type: CompType) -> Self {
+        unsafe {
+            let ptr = std::alloc::alloc(comp_type.layout);
+            std::ptr::copy(src_ptr, ptr, comp_type.layout.size());
+            Self { ptr, comp_type }
         }
-    }
-
-    pub(crate) unsafe fn write(&mut self, ptr: *mut u8) {
-        unsafe { std::ptr::copy(ptr, self.val.as_mut_ptr(), self.comp_type.layout.size()) }
     }
 
     pub(crate) unsafe fn cast<T: Clone>(self) -> Result<T, &'static str> {
         if self.comp_type != CompType::new::<T>() {
             return Err("type not matching");
         } else {
-            Ok(self.val.as_ptr().cast::<T>().as_ref().unwrap().clone())
+            Ok(self.ptr.cast::<T>().as_ref().unwrap().clone())
+        }
+    }
+}
+
+impl Drop for Value {
+    fn drop(&mut self) {
+        unsafe {
+            std::alloc::dealloc(self.ptr, self.comp_type.layout);
         }
     }
 }
 
 pub(crate) struct MultiValue {
-    vec: Vec<u8>,
+    pub(crate) ptr: *mut u8,
     pub(crate) comp_type: MultiCompType,
 }
 impl MultiValue {
-    pub(crate) fn new_empty(comp_type: MultiCompType) -> Self {
-        Self {
-            vec: vec![0u8; comp_type.total_layout.size()],
-            comp_type,
-        }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.vec.len()
-    }
-
-    pub(crate) unsafe fn write(&mut self, ptr: *mut u8) {
+    pub(crate) fn new(src_ptr: *mut u8, comp_type: MultiCompType) -> Self {
         unsafe {
-            std::ptr::copy(
-                ptr,
-                self.vec.as_mut_ptr(),
-                self.comp_type.total_layout.size(),
-            )
+            let ptr = std::alloc::alloc(comp_type.total_layout);
+            std::ptr::copy(src_ptr, ptr, comp_type.total_layout.size());
+            Self { ptr, comp_type }
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord)]
+impl Drop for MultiValue {
+    fn drop(&mut self) {
+        unsafe {
+            std::alloc::dealloc(self.ptr, self.comp_type.total_layout);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
 pub(crate) struct DenseIndex(usize);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
@@ -463,8 +477,6 @@ pub(crate) struct SparseSet {
     pub(crate) sparse: SparseVec,
 }
 
-// todo: make operations unsafe as they should be
-// todo: turn all sparse_index into SparseIndex
 impl SparseSet {
     pub(crate) fn new(comp_types: MultiCompType, size: usize) -> Self {
         let data_heap_ptr =
@@ -689,7 +701,6 @@ impl SparseSet {
     pub(crate) fn remove(&mut self, sparse_index: SparseIndex) -> Result<MultiValue, &'static str> {
         let dense_index = self.get_dense_index(sparse_index)?;
         self.sparse[sparse_index] = None;
-        let mut result = MultiValue::new_empty(self.ty);
         let val = unsafe { self.read_multi(dense_index).cast_multi_value() };
         Ok(val)
     }
@@ -723,7 +734,6 @@ impl SparseSet {
     }
 
     // "shallow swap" of two valid cells
-    // todo deal with the generation of swapping
     pub(crate) fn swap_within(
         &mut self,
         sparse_index1: SparseIndex,
@@ -755,11 +765,27 @@ impl SparseSet {
         &self,
         sparse_index: SparseIndex,
     ) -> Result<TableCellAccess, &'static str> {
-        todo!()
+        let ptrs = unsafe { self.read_raw(sparse_index)? };
+        Ok(TableCellAccess::new(
+            sparse_index,
+            ptrs.comp_type,
+            ptrs.ptr,
+            ptrs.get_gen(),
+        ))
     }
 
     pub(crate) fn get_column(&self) -> AccessColumn {
-        todo!()
+        let mut result = AccessColumn::new_empty(self.ty);
+        for index in 0..self.len {
+            let dense_index = DenseIndex(index);
+            let ptrs = unsafe { self.read_multi(dense_index) };
+            if let Ok(access) = ptrs.to_access() {
+                result.push(access);
+            } else {
+                continue;
+            }
+        }
+        result
     }
 
     //-----------------ALLOCATION-----------------//
@@ -793,7 +819,6 @@ pub struct MultiTable {
 }
 
 // TODO: cache all the comp types of all the rows, update the cache upon add/attach/remove/swap
-// TODO: refactoring api to location/pointer/generation seperate
 // TODO: incorporate all the query filter methods within the table api, making it a more proper table data structure
 // TODO: variadic component insertion, probably with tuple
 impl MultiTable {
