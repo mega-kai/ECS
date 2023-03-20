@@ -408,11 +408,11 @@ impl SparseSet {
         }
     }
 
-    fn ensure_sparse_len(&mut self, sparse_index: SparseIndex) {
+    fn ensure_sparse_cap(&mut self, sparse_index: SparseIndex) {
         let len = self.sparse.0.len();
         if len <= sparse_index.0 {
             self.sparse.0.resize(len * 2, None);
-            self.ensure_sparse_len(sparse_index);
+            self.ensure_sparse_cap(sparse_index);
         }
     }
 
@@ -488,7 +488,8 @@ impl SparseSet {
             return Err("wrong type of comp type");
         }
 
-        self.ensure_len(sparse_index);
+        self.ensure_sparse_cap(sparse_index);
+        self.ensure_dense_cap(1);
 
         let len = DenseIndex(self.len);
 
