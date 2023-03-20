@@ -318,20 +318,19 @@ impl SparseSet {
         }
     }
 
-    unsafe fn get_sparse_index(&self, dense_index: DenseIndex) -> usize {
+    unsafe fn get_sparse_index(&self, dense_index: DenseIndex) -> SparseIndex {
         unsafe {
             self.data_heap_ptr
                 .add(self.comp_type.layout.size() * dense_index.0)
-                .cast::<usize>()
+                .cast::<SparseIndex>()
                 .as_mut()
                 .unwrap()
                 .clone()
         }
     }
 
-    pub(crate) unsafe fn read_raw(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
-        let dense_index = self.get_dense_index(sparse_index)?;
-        Ok(self.read(dense_index))
+    pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
+        self.get_dense_index(sparse_index).is_ok()
     }
 
     //-----------------GENERATION OPERATIONS-----------------//
@@ -349,7 +348,6 @@ impl SparseSet {
     unsafe fn get_gen_dense(&self, dense_index: DenseIndex) -> Ptr {
         self.read_single(dense_index, CompType::new::<Generation>())
             .unwrap()
-        // ptr.cast::<Generation>().unwrap()
     }
 
     unsafe fn generation_advance(&self, dense_index: DenseIndex) -> Generation {
@@ -499,7 +497,7 @@ impl SparseSet {
     }
 
     pub(crate) fn get_cell(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
-        let ptrs = unsafe { self.read_raw(sparse_index)? };
+        let ptrs = unsafe { self.is_taken(sparse_index)? };
         Ok(Ptr::new(sparse_index, ptrs))
     }
 
@@ -618,7 +616,7 @@ impl Table {
         comp_type: CompType,
         sparse_index: SparseIndex,
     ) -> Result<Ptr, &'static str> {
-        unsafe { self.try_column(comp_type)?.read_raw(sparse_index) }
+        unsafe { self.try_column(comp_type)?.is_taken(sparse_index) }
     }
 
     //-----------------CELL IO OPERATION-----------------//
