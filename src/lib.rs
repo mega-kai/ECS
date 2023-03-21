@@ -326,11 +326,11 @@ impl SparseSet {
         }
     }
 
-    unsafe fn dense_write(&mut self, sparse_index: SparseIndex, dense_index: DenseIndex) {
+    unsafe fn dense_write(&mut self, sparse_index: SparseIndex, dense_index: Option<DenseIndex>) {
         if sparse_index.0 >= self.sparse.len() {
             panic!("index overflow")
         } else {
-            self.sparse[sparse_index] = Some(dense_index);
+            self.sparse[sparse_index] = dense_index;
         }
     }
 
