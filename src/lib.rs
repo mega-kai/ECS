@@ -398,9 +398,9 @@ impl SparseSet {
         Ptr::new(ptr, self.comp_type, sparse)
     }
 
-    unsafe fn content_write(&self, dense_index: DenseIndex, ptr: Ptr) {
+    unsafe fn content_write(&self, dense_index: DenseIndex, val: Value) {
         let content_ptr = self.get_ptr_content(dense_index);
-        copy(ptr.ptr, content_ptr, self.comp_type.layout.size())
+        copy(val.ptr, content_ptr, self.comp_type.layout.size())
     }
 
     //-----------------ALLOCATION-----------------//
@@ -455,7 +455,7 @@ impl SparseSet {
     }
 
     // these four functions do not exceed self.len
-    unsafe fn cell_read(&self, dense_index: DenseIndex) -> (SparseIndex, Generation, Ptr) {
+    unsafe fn cell_read(&self, dense_index: DenseIndex) -> Ptr {
         todo!()
     }
 
@@ -475,7 +475,7 @@ impl SparseSet {
         &self,
         dense_index_from: DenseIndex,
         dense_index_to: DenseIndex,
-    ) -> Value {
+    ) -> (Value, Ptr, Ptr) {
         // after replacing would do a tail replace if from index is not the last element
         todo!()
     }
