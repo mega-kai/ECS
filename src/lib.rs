@@ -462,16 +462,20 @@ impl SparseSet {
         todo!()
     }
 
-    unsafe fn cell_swap(&self, dense_index1: DenseIndex, dense_index2: DenseIndex) {}
+    unsafe fn cell_swap(&self, dense_index1: DenseIndex, dense_index2: DenseIndex) {
+        todo!()
+    }
 
-    // would pop the value from dense to, and copy
     unsafe fn cell_replace(
         &self,
         dense_index_from: DenseIndex,
         dense_index_to: DenseIndex,
     ) -> Value {
+        // after replacing would do a tail replace if from index is not the last element
         todo!()
     }
+
+    //-----------------SPARSE REFLECTION AFTER CELL MANIPULATION-----------------//
 
     //-----------------MAIN API-----------------//
     pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
