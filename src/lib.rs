@@ -326,6 +326,7 @@ impl SparseSet {
         }
     }
 
+    // todo ensure length here
     unsafe fn dense_write(&mut self, sparse_index: SparseIndex, dense_index: Option<DenseIndex>) {
         if sparse_index.0 >= self.sparse.len() {
             panic!("index overflow")
@@ -397,7 +398,6 @@ impl SparseSet {
         Ptr::new(ptr, self.comp_type, sparse)
     }
 
-    // just write content, no touching generation or sparse index
     unsafe fn content_write(&self, dense_index: DenseIndex, ptr: Ptr) {
         let content_ptr = self.get_ptr_content(dense_index);
         copy(ptr.ptr, content_ptr, self.comp_type.layout.size())
@@ -444,7 +444,8 @@ impl SparseSet {
     }
 
     // push this content coupled with sparse index to the tail of dense vec, auto init the generation to zero
-    unsafe fn tail_push(&self, stuff: (SparseIndex, Generation, Ptr)) -> DenseIndex {
+    // todo ensure len here
+    unsafe fn tail_push(&self, stuff: (SparseIndex, Generation, Ptr)) -> (DenseIndex, Ptr) {
         todo!()
     }
 
@@ -458,11 +459,15 @@ impl SparseSet {
         todo!()
     }
 
-    unsafe fn cell_write(&self, dense_index: DenseIndex, stuff: (SparseIndex, Generation, Ptr)) {
+    unsafe fn cell_write(
+        &self,
+        dense_index: DenseIndex,
+        stuff: (SparseIndex, Generation, Ptr),
+    ) -> Ptr {
         todo!()
     }
 
-    unsafe fn cell_swap(&self, dense_index1: DenseIndex, dense_index2: DenseIndex) {
+    unsafe fn cell_swap(&self, dense_index1: DenseIndex, dense_index2: DenseIndex) -> (Ptr, Ptr) {
         todo!()
     }
 
@@ -474,8 +479,6 @@ impl SparseSet {
         // after replacing would do a tail replace if from index is not the last element
         todo!()
     }
-
-    //-----------------SPARSE REFLECTION AFTER CELL MANIPULATION-----------------//
 
     //-----------------MAIN API-----------------//
     pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
@@ -497,14 +500,10 @@ impl SparseSet {
         self.ensure_sparse_cap(sparse_index);
         self.ensure_dense_cap(1);
 
-        self.dense_write(sparse_index, dense_index);
-
         unsafe {
-            // todo advance gen and write the sparse index
-            self.content_write(len, ptrs);
-            let raw_dst_ptr = self.content_read(len);
-            self.len += 1;
-            todo!()
+            let (dense_index, ptr) = self.tail_push((sparse_index, Generation(0), ptrs));
+            self.dense_write(sparse_index, Some(dense_index));
+            Ok(ptr)
         }
     }
 
