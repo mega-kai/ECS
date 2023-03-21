@@ -313,6 +313,44 @@ impl SparseSet {
         }
     }
 
+    //-----------------DENSE INDEX-----------------//
+    fn dense_read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
+        if sparse_index.0 >= self.sparse.len() {
+            Err("index overflow")
+        } else {
+            if let Some(dense_index) = self.sparse[sparse_index] {
+                Ok(dense_index)
+            } else {
+                Err("attempt to read empty sparse index")
+            }
+        }
+    }
+
+    unsafe fn dense_write(&mut self, sparse_index: SparseIndex, dense_index: DenseIndex) {
+        if sparse_index.0 >= self.sparse.len() {
+            panic!("index overflow")
+        } else {
+            self.sparse[sparse_index] = Some(dense_index);
+        }
+    }
+
+    //-----------------SPARSE INDEX-----------------//
+    unsafe fn sparse_read(&self, dense_index: DenseIndex) -> SparseIndex {
+        self.get_ptr_sparse(dense_index)
+            .cast::<SparseIndex>()
+            .as_mut()
+            .unwrap()
+            .clone()
+    }
+
+    unsafe fn sparse_write(&self, dense_index: DenseIndex, sparse_index: SparseIndex) {
+        *self
+            .get_ptr_sparse(dense_index)
+            .cast::<SparseIndex>()
+            .as_mut()
+            .unwrap() = sparse_index;
+    }
+
     //-----------------GET PTR-----------------//
     unsafe fn get_ptr_sparse(&self, dense_index: DenseIndex) -> *mut u8 {
         self.data_heap_ptr
@@ -338,19 +376,6 @@ impl SparseSet {
             .clone()
     }
 
-    unsafe fn gen_advance(&self, dense_index: DenseIndex) -> Generation {
-        let ptr = self.get_ptr_gen(dense_index);
-        ptr.cast::<Generation>().as_mut().unwrap().advance()
-    }
-
-    unsafe fn gen_clear(&self, dense_index: DenseIndex) {
-        self.get_ptr_gen(dense_index)
-            .cast::<Generation>()
-            .as_mut()
-            .unwrap()
-            .clear();
-    }
-
     unsafe fn gen_write(&self, dense_index: DenseIndex, gen: Generation) {
         *self
             .get_ptr_gen(dense_index)
@@ -360,21 +385,9 @@ impl SparseSet {
             .unwrap() = gen;
     }
 
-    //-----------------SPARSE INDEX-----------------//
-    unsafe fn sparse_read(&self, dense_index: DenseIndex) -> SparseIndex {
-        self.get_ptr_sparse(dense_index)
-            .cast::<SparseIndex>()
-            .as_mut()
-            .unwrap()
-            .clone()
-    }
-
-    unsafe fn sparse_write(&self, dense_index: DenseIndex, sparse_index: SparseIndex) {
-        *self
-            .get_ptr_sparse(dense_index)
-            .cast::<SparseIndex>()
-            .as_mut()
-            .unwrap() = sparse_index;
+    unsafe fn gen_advance(&self, dense_index: DenseIndex) -> Generation {
+        let ptr = self.get_ptr_gen(dense_index);
+        ptr.cast::<Generation>().as_mut().unwrap().advance()
     }
 
     //-----------------CONTENT-----------------//
@@ -384,20 +397,10 @@ impl SparseSet {
         Ptr::new(ptr, self.comp_type, sparse)
     }
 
-    unsafe fn content_copy(&self, dense_index: DenseIndex) -> Value {
-        self.content_read(dense_index).cast_value()
-    }
-
     // just write content, no touching generation or sparse index
     unsafe fn content_write(&self, dense_index: DenseIndex, ptr: Ptr) {
         let content_ptr = self.get_ptr_content(dense_index);
         copy(ptr.ptr, content_ptr, self.comp_type.layout.size())
-    }
-
-    unsafe fn content_replace(&self, dense_index: DenseIndex, ptrs: Ptr) -> Value {
-        let result = self.content_copy(dense_index);
-        self.content_write(dense_index, ptrs);
-        result
     }
 
     //-----------------ALLOCATION-----------------//
@@ -434,58 +437,55 @@ impl SparseSet {
         self.data_heap_ptr = new_data_ptr;
     }
 
-    //-----------------SPARSE HELPERS-----------------//
-    fn dense_read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
-        if sparse_index.0 >= self.sparse.len() {
-            Err("index overflow")
-        } else {
-            if let Some(dense_index) = self.sparse[sparse_index] {
-                Ok(dense_index)
-            } else {
-                Err("attempt to read empty sparse index")
-            }
-        }
+    //-----------------DENSE CELL HELPERS-----------------//
+    // move last dense element along with its content to the dense index and shrink the len
+    unsafe fn tail_replace(&self, dense_index: DenseIndex) {
+        todo!()
     }
 
-    fn dense_write(
-        &mut self,
-        sparse_index: SparseIndex,
-        dense_index: DenseIndex,
-    ) -> Result<(), &'static str> {
-        if sparse_index.0 >= self.sparse.len() {
-            Err("index overflow")
-        } else {
-            if let Some(current_index) = self.sparse[sparse_index] {
-                self.sparse[sparse_index] = Some(dense_index);
-                Ok(())
-            } else {
-                Err("attempt to write empty sparse index")
-            }
-        }
+    // push this content coupled with sparse index to the tail of dense vec, auto init the generation to zero
+    unsafe fn tail_push(&self, stuff: (SparseIndex, Generation, Ptr)) -> DenseIndex {
+        todo!()
     }
 
-    //-----------------DENSE HELPERS-----------------//
-    // move last dense element along with its content to the dense index
-    unsafe fn tail_move(&self, dense_index: DenseIndex) {}
+    // only panics if not valid
+    unsafe fn is_dense_valid(&self, dense_index: DenseIndex) -> bool {
+        todo!()
+    }
 
-    // push this content to the tail of dense vec
-    unsafe fn push_content(&self, ptr: Ptr) {}
+    // these four functions do not exceed self.len
+    unsafe fn cell_read(&self, dense_index: DenseIndex) -> (SparseIndex, Generation, Ptr) {
+        todo!()
+    }
+
+    unsafe fn cell_write(&self, dense_index: DenseIndex, stuff: (SparseIndex, Generation, Ptr)) {
+        todo!()
+    }
+
+    unsafe fn cell_swap(&self, dense_index1: DenseIndex, dense_index2: DenseIndex) {}
+
+    // would pop the value from dense to, and copy
+    unsafe fn cell_replace(
+        &self,
+        dense_index_from: DenseIndex,
+        dense_index_to: DenseIndex,
+    ) -> Value {
+        todo!()
+    }
 
     //-----------------MAIN API-----------------//
     pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
         self.dense_read(sparse_index).is_ok()
     }
 
-    // todo start from here
     pub(crate) fn insert(
         &mut self,
         sparse_index: SparseIndex,
         ptrs: Ptr,
     ) -> Result<Ptr, &'static str> {
-        if self.dense_read(sparse_index).is_ok() {
+        if self.is_taken(sparse_index) {
             return Err("cell taken");
         }
-
         if ptrs.comp_type != self.comp_type {
             return Err("wrong type of comp type");
         }
@@ -493,9 +493,7 @@ impl SparseSet {
         self.ensure_sparse_cap(sparse_index);
         self.ensure_dense_cap(1);
 
-        let len = DenseIndex(self.len);
-
-        self.sparse[sparse_index] = Some(len);
+        self.dense_write(sparse_index, dense_index);
 
         unsafe {
             // todo advance gen and write the sparse index
