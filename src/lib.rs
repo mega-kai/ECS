@@ -464,17 +464,19 @@ impl SparseSet {
         }
     }
 
+    //-----------------DENSE HELPERS-----------------//
+    // move last dense element along with its content to the dense index
+    unsafe fn tail_move(&self, dense_index: DenseIndex) {}
+
+    // push this content to the tail of dense vec
+    unsafe fn push_content(&self, ptr: Ptr) {}
+
     //-----------------MAIN API-----------------//
     pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
         self.dense_read(sparse_index).is_ok()
     }
 
-    // move last dense element along with its content to the dense index
-    unsafe fn tail_swap(&self, dense_index: DenseIndex) {}
-
-    // push this content to the tail of dense vec
-    unsafe fn push_content(&self, ptr: Ptr) {}
-
+    // todo start from here
     pub(crate) fn insert(
         &mut self,
         sparse_index: SparseIndex,
