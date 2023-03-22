@@ -231,6 +231,12 @@ impl SparseVec {
     }
 }
 
+struct Access {
+    ptr: Ptr,
+    sparse_index: SparseIndex,
+    generation: Generation,
+}
+
 struct SparseSet {
     comp_type: CompType,
     dense_vec: DenseVec,
@@ -265,12 +271,6 @@ impl SparseSet {
     fn get_column(&self) -> Result<Vec<Ptr>, &'static str> {
         todo!()
     }
-}
-
-struct Access {
-    ptr: Ptr,
-    sparse_index: SparseIndex,
-    generation: Generation,
 }
 
 struct Table {
