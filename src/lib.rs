@@ -35,7 +35,7 @@ const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CompType {
+struct CompType {
     type_id: TypeId,
     layout: Layout,
 }
@@ -48,19 +48,13 @@ impl CompType {
     }
 }
 
-pub trait Component: Clone + 'static {
+trait Component: Clone + 'static {
     fn get_id() -> CompType {
         CompType {
             type_id: TypeId::of::<Self>(),
             layout: Layout::new::<Self>(),
         }
     }
-}
-
-pub struct Access {
-    ptr: Ptr,
-    sparse_index: SparseIndex,
-    generation: Generation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -273,7 +267,13 @@ impl SparseSet {
     }
 }
 
-pub struct Table {
+struct Access {
+    ptr: Ptr,
+    sparse_index: SparseIndex,
+    generation: Generation,
+}
+
+struct Table {
     table: HashMap<CompType, SparseSet>,
     bottom_sparse_index: SparseIndex,
 }
@@ -327,7 +327,7 @@ impl Table {
     }
 
     //-----------------OPERATIONS-----------------//
-    fn push(
+    fn insert(
         &mut self,
         sparse_index: SparseIndex,
         // todo: maybe Value??
@@ -336,16 +336,19 @@ impl Table {
         todo!()
     }
 
-    fn pop_cell(&mut self, access: Ptr) -> Result<Value, &'static str> {
+    fn remove(&mut self, access: Ptr) -> Result<Value, &'static str> {
         todo!()
     }
 
-    fn access_cell(&mut self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
+    fn read(&mut self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
         todo!()
     }
+
+    //-----------------QUERY-----------------//
+    fn query() {}
 }
 
-pub struct Command<'a> {
+struct Command<'a> {
     table: &'a mut Table,
 }
 
@@ -355,42 +358,23 @@ impl<'a> Command<'a> {
         Self { table }
     }
 
-    pub fn add_component<C: Component>(&mut self, mut component: C) -> Access {
-        todo!()
-    }
-
-    // key or entity index? usize or generational index?
-    pub fn attach_component<C: Component>(
-        &mut self,
-        key: Access,
-        mut component: C,
-    ) -> Result<Access, &'static str> {
-        todo!()
-    }
-
-    pub fn remove_component<C: Component>(&mut self, key: Access) -> Result<C, &'static str> {
-        todo!()
-    }
-
-    // pub fn query<C: Component, F: Filter>(&mut self) -> PtrColumn {
-    //     todo!()
-    // }
+    fn new_entity_with_component(&mut self) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[non_exhaustive]
-pub enum ExecutionFrequency {
+enum ExecutionFrequency {
     Always,
     Once(bool),
     // Timed(f64, f64),
 }
-pub struct System {
+struct System {
     order: usize,
     frequency: ExecutionFrequency,
     func: fn(Command),
 }
 impl System {
-    pub fn default(func: fn(Command)) -> Self {
+    fn default(func: fn(Command)) -> Self {
         Self {
             order: 0,
             frequency: ExecutionFrequency::Always,
@@ -398,7 +382,7 @@ impl System {
         }
     }
 
-    pub fn new(order: usize, frequency: ExecutionFrequency, func: fn(Command)) -> Self {
+    fn new(order: usize, frequency: ExecutionFrequency, func: fn(Command)) -> Self {
         Self {
             order,
             frequency,
@@ -436,13 +420,13 @@ impl Ord for System {
     }
 }
 
-pub struct Scheduler {
+struct Scheduler {
     new_pool: Vec<System>,
     // waiting: Vec<System>,
     queue: Vec<System>,
 }
 impl Scheduler {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             new_pool: vec![],
             // waiting: vec![],
@@ -450,7 +434,7 @@ impl Scheduler {
         }
     }
 
-    pub fn add_system(&mut self, system: System) {
+    fn add_system(&mut self, system: System) {
         self.new_pool.push(system);
     }
 
@@ -464,20 +448,20 @@ impl Scheduler {
     }
 }
 
-pub struct ECS {
+struct ECS {
     table: Table,
     scheduler: Scheduler,
 }
 
 impl ECS {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             table: Table::new(),
             scheduler: Scheduler::new(),
         }
     }
 
-    pub fn add_system(&mut self, func: fn(Command), order: usize, once: bool) {
+    fn add_system(&mut self, func: fn(Command), order: usize, once: bool) {
         match once {
             true => self.scheduler.add_system(System {
                 order,
@@ -492,7 +476,7 @@ impl ECS {
         }
     }
 
-    pub fn tick(&mut self) {
+    fn tick(&mut self) {
         self.scheduler.prepare_queue();
         for system in &mut self.scheduler.queue {
             match system.frequency {
