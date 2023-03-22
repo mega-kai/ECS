@@ -430,7 +430,7 @@ impl Table {
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    pub(crate) fn init_column(&mut self, comp_type: CompType) -> &mut SparseSet {
+    pub(crate) fn new_column(&mut self, comp_type: CompType) -> &mut SparseSet {
         if self.try_column(comp_type).is_ok() {
             panic!("type cannot be init twice")
         }
@@ -442,12 +442,12 @@ impl Table {
         Ok(self.try_column(comp_type)?.get_column())
     }
 
-    pub(crate) fn pop_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
+    pub(crate) fn remove_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
         self.table.remove(&comp_type)
     }
 
     //-----------------ROW MANIPULATION-----------------//
-    pub(crate) fn init_row(&mut self) -> SparseIndex {
+    pub(crate) fn new_row(&mut self) -> SparseIndex {
         let result = self.bottom_sparse_index;
         self.row_type_cache.insert(
             self.bottom_sparse_index,
