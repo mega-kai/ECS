@@ -297,11 +297,14 @@ pub(crate) struct DenseVec {
 
 impl DenseVec {
     unsafe fn new(comp_type: CompType, size: usize) -> Self {
-        Self {
+        let result = Self {
             sparse_index_vec: TypeErasedVec::new(CompType::new::<SparseIndex>(), size),
             comp_vec: TypeErasedVec::new(comp_type, size),
-        }
+        };
+        todo!()
     }
+
+    unsafe fn push(&mut self, ptr: *mut u8) {}
 }
 
 //----------------SPARSE SET------------------//
