@@ -57,30 +57,6 @@ trait Component: Clone + 'static {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-// this is for content, not generation or sparse index
-struct Ptr {
-    ptr: *mut u8,
-    comp_type: CompType,
-}
-impl Ptr {
-    fn new(ptr: *mut u8, comp_type: CompType, sparse_index: SparseIndex) -> Self {
-        Self { ptr, comp_type }
-    }
-
-    fn cast_value(self) -> Value {
-        Value::new(self.ptr, self.comp_type)
-    }
-
-    unsafe fn cast<T: 'static>(&self) -> Result<&mut T, &'static str> {
-        if CompType::new::<T>() != self.comp_type {
-            return Err("type not matching");
-        } else {
-            Ok(self.ptr.cast::<T>().as_mut().ok_or("casting failure")?)
-        }
-    }
-}
-
 #[derive(Clone)]
 struct Value {
     ptr: *mut u8,
@@ -232,7 +208,8 @@ impl SparseVec {
 }
 
 struct Access {
-    ptr: Ptr,
+    ptr: *mut u8,
+    comp_type: CompType,
     sparse_index: SparseIndex,
     generation: Generation,
 }
@@ -252,11 +229,11 @@ impl SparseSet {
         todo!()
     }
 
-    fn read(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
+    fn read(&self, sparse_index: SparseIndex) -> Result<Access, &'static str> {
         todo!()
     }
 
-    fn insert(&mut self, sparse_index: SparseIndex, ptrs: Ptr) -> Result<Ptr, &'static str> {
+    fn insert(&mut self, sparse_index: SparseIndex, val: Value) -> Result<Access, &'static str> {
         todo!()
     }
 
@@ -264,11 +241,11 @@ impl SparseSet {
         todo!()
     }
 
-    fn get_cell(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
+    fn get_cell(&self, sparse_index: SparseIndex) -> Result<Access, &'static str> {
         todo!()
     }
 
-    fn get_column(&self) -> Result<Vec<Ptr>, &'static str> {
+    fn get_column(&self) -> Result<Vec<Access>, &'static str> {
         todo!()
     }
 }
@@ -332,15 +309,15 @@ impl Table {
         sparse_index: SparseIndex,
         // todo: maybe Value??
         values: Value,
-    ) -> Result<Ptr, &'static str> {
+    ) -> Result<Access, &'static str> {
         todo!()
     }
 
-    fn remove(&mut self, access: Ptr) -> Result<Value, &'static str> {
+    fn remove(&mut self, access: Access) -> Result<Value, &'static str> {
         todo!()
     }
 
-    fn read(&mut self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
+    fn read(&mut self, sparse_index: SparseIndex) -> Result<Access, &'static str> {
         todo!()
     }
 
