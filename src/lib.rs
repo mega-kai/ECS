@@ -62,15 +62,10 @@ pub trait Component: Clone + 'static {
 pub struct Ptr {
     ptr: *mut u8,
     comp_type: CompType,
-    sparse_index: SparseIndex,
 }
 impl Ptr {
     fn new(ptr: *mut u8, comp_type: CompType, sparse_index: SparseIndex) -> Self {
-        Self {
-            ptr,
-            comp_type,
-            sparse_index,
-        }
+        Self { ptr, comp_type }
     }
 
     fn cast_value(self) -> Value {
@@ -83,18 +78,6 @@ impl Ptr {
         } else {
             Ok(self.ptr.cast::<T>().as_mut().ok_or("casting failure")?)
         }
-    }
-}
-
-impl PartialOrd for Ptr {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.sparse_index.partial_cmp(&other.sparse_index)
-    }
-}
-
-impl Ord for Ptr {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.sparse_index.cmp(&other.sparse_index)
     }
 }
 
@@ -330,10 +313,9 @@ impl Table {
         todo!()
     }
 
-    //-----------------CELL IO OPERATION-----------------//
+    //-----------------OPERATIONS-----------------//
 
-    // if not column init, init it automatically
-    fn push_cell(
+    fn push(
         &mut self,
         sparse_index: SparseIndex,
         // todo: maybe Value??
@@ -346,30 +328,7 @@ impl Table {
         todo!()
     }
 
-    //-----------------CELL OPERATION WITHIN TABLE-----------------//
-
-    /// one valid cell move to an empty one, returns the new table cell access
-    fn move_cell_within(
-        &mut self,
-        from_key: Ptr,
-        to_index: SparseIndex,
-    ) -> Result<Ptr, &'static str> {
-        todo!()
-    }
-
-    /// two valid cells, move one to another location, and pop that location
-    fn replace_cell_within(
-        &mut self,
-        from_key: Ptr,
-        to_key: Ptr,
-    ) -> Result<(Value, Ptr), &'static str> {
-        todo!()
-    }
-
-    /// shallow swap between two valid cells
-    fn swap_cell_within(&mut self, key1: Ptr, key2: Ptr) -> Result<(Ptr, Ptr), &'static str> {
-        todo!()
-    }
+    fn access_cell() {}
 }
 
 pub struct Command<'a> {
