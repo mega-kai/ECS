@@ -236,10 +236,6 @@ impl Generation {
         self.0 += 1;
         *self
     }
-
-    pub(crate) fn clear(&mut self) {
-        self.0 = 0;
-    }
 }
 
 //-----------------SPARSE/DENSE INDEX-----------------//
@@ -248,35 +244,6 @@ pub(crate) struct SparseIndex(usize);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
 pub(crate) struct DenseIndex(usize);
-
-pub(crate) struct SparseVec(Vec<Option<DenseIndex>>);
-impl SparseVec {
-    pub(crate) fn new(size: usize) -> Self {
-        Self(vec![None; size])
-    }
-
-    pub(crate) fn resize(&mut self, size: usize) {
-        self.0.resize(size, None);
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl Index<SparseIndex> for SparseVec {
-    type Output = Option<DenseIndex>;
-
-    fn index(&self, index: SparseIndex) -> &Self::Output {
-        &self.0[index.0]
-    }
-}
-
-impl IndexMut<SparseIndex> for SparseVec {
-    fn index_mut(&mut self, index: SparseIndex) -> &mut Self::Output {
-        &mut self.0[index.0]
-    }
-}
 
 //----------------SPARSE SET------------------//
 pub(crate) struct SparseSet {
