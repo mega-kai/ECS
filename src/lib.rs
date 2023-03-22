@@ -61,10 +61,10 @@ pub trait Component: Clone + 'static {
 //-----------------TYPE ERASED POINTER-----------------//
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // this is for content, not generation or sparse index
-pub(crate) struct Ptr {
-    pub(crate) ptr: *mut u8,
-    pub(crate) comp_type: CompType,
-    pub(crate) sparse_index: SparseIndex,
+pub struct Ptr {
+    ptr: *mut u8,
+    comp_type: CompType,
+    sparse_index: SparseIndex,
 }
 impl Ptr {
     pub(crate) fn new(ptr: *mut u8, comp_type: CompType, sparse_index: SparseIndex) -> Self {
@@ -135,7 +135,7 @@ impl Drop for Value {
 //-----------------TYPE ERASED PTR COLUMN/ROW-----------------//
 // all with the same component type and different sparse index
 #[derive(Clone)]
-pub struct PtrColumn {
+pub(crate) struct PtrColumn {
     pub(crate) comp_type: CompType,
     // sorted with sparse index
     pub(crate) vec: Vec<Ptr>,
@@ -481,15 +481,6 @@ impl Table {
             .or_insert(SparseSet::new(comp_type, 64))
     }
 
-    // bypassing generation
-    pub(crate) fn try_cell(
-        &mut self,
-        comp_type: CompType,
-        sparse_index: SparseIndex,
-    ) -> Result<Ptr, &'static str> {
-        unsafe { self.try_column(comp_type)?.is_taken(sparse_index) }
-    }
-
     //-----------------CELL IO OPERATION-----------------//
 
     // if not column init, init it automatically
@@ -499,23 +490,11 @@ impl Table {
         // todo: maybe Value??
         values: Ptr,
     ) -> Result<Ptr, &'static str> {
-        let result = self
-            .ensure_column(values.comp_type)
-            .insert(values, sparse_index)?;
-        self.row_type_cache
-            .get_mut(&sparse_index)
-            .ok_or("invalid row")?
-            .push(result)?;
-        Ok(result)
+        todo!()
     }
 
     pub(crate) fn pop_cell(&mut self, access: Ptr) -> Result<Value, &'static str> {
-        self.row_type_cache
-            .get_mut(&access.sparse_index)
-            .ok_or("invalid row")?
-            .pop(access.ptr.comp_type)?;
-        self.try_column(access.ptr.comp_type)?
-            .remove(access.sparse_index)
+        todo!()
     }
 
     pub(crate) fn replace_cell(
@@ -524,16 +503,7 @@ impl Table {
         // todo maybe value?
         values: Ptr,
     ) -> Result<Value, &'static str> {
-        self.row_type_cache
-            .get_mut(&access.sparse_index)
-            .ok_or("invalid row")?
-            .pop(access.ptr.comp_type)?;
-        self.row_type_cache
-            .get_mut(&access.sparse_index)
-            .ok_or("invalid row")?
-            .push(values.to_access())?;
-        self.try_column(access.ptr.comp_type)?
-            .replace(access.sparse_index, values)
+        todo!()
     }
 
     //-----------------CELL OPERATION WITHIN TABLE-----------------//
@@ -544,24 +514,7 @@ impl Table {
         from_key: Ptr,
         to_index: SparseIndex,
     ) -> Result<Ptr, &'static str> {
-        if self.try_cell(from_key.ptr.comp_type, to_index).is_ok() {
-            return Err("cell not vacant");
-        } else {
-            let access = self
-                .row_type_cache
-                .get_mut(&from_key.sparse_index)
-                .ok_or("invalid row")?
-                .pop(from_key.ptr.comp_type)?;
-            self.row_type_cache
-                .get_mut(&to_index)
-                .ok_or("invalid row")?
-                .push(access)?;
-            let result = self
-                .try_column(from_key.ptr.comp_type)?
-                .insert(Ptr::new(from_key.ptr.ptr, from_key.ptr.comp_type), to_index)?;
-            self.pop_cell(from_key)?;
-            Ok(result)
-        }
+        todo!()
     }
 
     /// two valid cells, move one to another location, and pop that location
@@ -570,26 +523,7 @@ impl Table {
         from_key: Ptr,
         to_key: Ptr,
     ) -> Result<(Value, Ptr), &'static str> {
-        if from_key.column_type() != to_key.column_type() {
-            return Err("not on the same column");
-        }
-        let cached_access = self
-            .row_type_cache
-            .get_mut(&from_key.sparse_index)
-            .ok_or("invalid row")?
-            .pop(to_key.ptr.comp_type)?;
-        self.row_type_cache
-            .get_mut(&to_key.sparse_index)
-            .ok_or("invalid row")?
-            .push(cached_access)?;
-
-        let result = self
-            .try_column(from_key.ptr.comp_type)?
-            .remove(to_key.sparse_index)?;
-        let access = self
-            .try_column(from_key.ptr.comp_type)?
-            .move_value(from_key.sparse_index, to_key.sparse_index)?;
-        Ok((result, access))
+        todo!()
     }
 
     /// shallow swap between two valid cells
@@ -598,30 +532,7 @@ impl Table {
         key1: Ptr,
         key2: Ptr,
     ) -> Result<(Ptr, Ptr), &'static str> {
-        if key1.column_type() != key2.column_type() {
-            return Err("not on the same column");
-        }
-        let cached_access1 = self
-            .row_type_cache
-            .get_mut(&key1.sparse_index)
-            .ok_or("invalid row")?
-            .pop(key1.ptr.comp_type)?;
-        let cached_access2 = self
-            .row_type_cache
-            .get_mut(&key2.sparse_index)
-            .ok_or("invalid row")?
-            .pop(key1.ptr.comp_type)?;
-        self.row_type_cache
-            .get_mut(&key1.sparse_index)
-            .ok_or("invalid row")?
-            .push(cached_access2)?;
-        self.row_type_cache
-            .get_mut(&key2.sparse_index)
-            .ok_or("invalid row")?
-            .push(cached_access1)?;
-
-        self.try_column(key1.column_type())?
-            .swap_within(key1.sparse_index(), key2.sparse_index())
+        todo!()
     }
 }
 
@@ -631,40 +542,6 @@ pub enum ExecutionFrequency {
     Always,
     Once(bool),
     // Timed(f64, f64),
-}
-
-pub struct With<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
-impl<FilterComp: Component> With<FilterComp> {
-    // all these access would have the same type but different id
-    pub(crate) fn apply_with_filter(mut vec: PtrColumn, table: &mut Table) -> PtrColumn {
-        todo!()
-    }
-}
-
-pub struct Without<FilterComp: Component>(pub(crate) PhantomData<FilterComp>);
-impl<FilterComp: Component> Without<FilterComp> {
-    pub(crate) fn apply_without_filter(mut vec: PtrColumn, table: &mut Table) -> PtrColumn {
-        todo!()
-    }
-}
-
-pub trait Filter: Sized {
-    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn;
-}
-impl<FilterComp: Component> Filter for With<FilterComp> {
-    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn {
-        With::<FilterComp>::apply_with_filter(vec, table)
-    }
-}
-impl<FilterComp: Component> Filter for Without<FilterComp> {
-    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn {
-        Without::<FilterComp>::apply_without_filter(vec, table)
-    }
-}
-impl Filter for () {
-    fn apply_on(vec: PtrColumn, table: &mut Table) -> PtrColumn {
-        vec
-    }
 }
 
 pub struct Command<'a> {
@@ -694,9 +571,9 @@ impl<'a> Command<'a> {
         todo!()
     }
 
-    pub fn query<C: Component, F: Filter>(&mut self) -> PtrColumn {
-        todo!()
-    }
+    // pub fn query<C: Component, F: Filter>(&mut self) -> PtrColumn {
+    //     todo!()
+    // }
 }
 
 pub struct System {
