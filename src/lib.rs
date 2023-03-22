@@ -48,15 +48,6 @@ impl CompType {
     }
 }
 
-trait Component: Clone + 'static {
-    fn get_id() -> CompType {
-        CompType {
-            type_id: TypeId::of::<Self>(),
-            layout: Layout::new::<Self>(),
-        }
-    }
-}
-
 #[derive(Clone)]
 struct Value {
     ptr: *mut u8,
@@ -469,18 +460,14 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
 
     #[derive(Clone)]
     struct Health(i32);
-    impl Component for Health {}
 
     #[derive(Clone, Debug)]
     struct Mana(i32);
-    impl Component for Mana {}
 
     #[derive(Clone, Debug)]
     struct Player(&'static str);
-    impl Component for Player {}
 }
