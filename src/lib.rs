@@ -231,11 +231,14 @@ impl SparseVec {
     fn toggle_change(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
         todo!()
     }
+
+    fn read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
+        todo!()
+    }
 }
 
 struct SparseSet {
     comp_type: CompType,
-
     dense_vec: DenseVec,
     sparse_vec: SparseVec,
 }
@@ -246,6 +249,10 @@ impl SparseSet {
     }
 
     fn is_taken(&self, sparse_index: SparseIndex) -> bool {
+        todo!()
+    }
+
+    fn read(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
         todo!()
     }
 
