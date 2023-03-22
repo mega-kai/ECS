@@ -314,7 +314,7 @@ impl SparseSet {
     }
 
     //-----------------DENSE INDEX-----------------//
-    fn dense_read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
+    fn dense_index_read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
         if sparse_index.0 >= self.sparse.len() {
             Err("index overflow")
         } else {
@@ -327,11 +327,50 @@ impl SparseSet {
     }
 
     // todo ensure length here
-    unsafe fn dense_write(&mut self, sparse_index: SparseIndex, dense_index: Option<DenseIndex>) {
+    unsafe fn sparse_vec_change(
+        &mut self,
+        sparse_index: SparseIndex,
+        dense_index: DenseIndex,
+    ) -> Result<(), &'static str> {
         if sparse_index.0 >= self.sparse.len() {
-            panic!("index overflow")
+            Err("index overflow")
         } else {
-            self.sparse[sparse_index] = dense_index;
+            if let Some(index) = self.sparse[sparse_index] {
+                self.sparse[sparse_index] = Some(dense_index);
+                Ok(())
+            } else {
+                Err("it's none")
+            }
+        }
+    }
+
+    unsafe fn sparse_vec_on(
+        &mut self,
+        sparse_index: SparseIndex,
+        dense_index: DenseIndex,
+    ) -> Result<(), &'static str> {
+        if sparse_index.0 >= self.sparse.len() {
+            Err("index overflow")
+        } else {
+            if let Some(index) = self.sparse[sparse_index] {
+                Err("occupied")
+            } else {
+                self.sparse[sparse_index] = Some(dense_index);
+                Ok(())
+            }
+        }
+    }
+
+    unsafe fn sparse_vec_off(&mut self, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        if sparse_index.0 >= self.sparse.len() {
+            Err("index overflow")
+        } else {
+            if let Some(index) = self.sparse[sparse_index] {
+                self.sparse[sparse_index] = None;
+                Ok(())
+            } else {
+                Err("spot taken")
+            }
         }
     }
 
@@ -439,7 +478,7 @@ impl SparseSet {
 
     //-----------------DENSE CELL HELPERS-----------------//
     // move last dense element along with its content to the dense index and shrink the len
-    unsafe fn tail_replace(&self, dense_index: DenseIndex) {
+    unsafe fn tail_replace(&self, dense_index: DenseIndex) -> Value {
         todo!()
     }
 
@@ -475,6 +514,7 @@ impl SparseSet {
         &self,
         dense_index_from: DenseIndex,
         dense_index_to: DenseIndex,
+        // first being the value popped, second is the ptr at dense_to, third is from dense_from
     ) -> (Value, Ptr, Ptr) {
         // after replacing would do a tail replace if from index is not the last element
         todo!()
@@ -482,7 +522,7 @@ impl SparseSet {
 
     //-----------------MAIN API-----------------//
     pub(crate) fn is_taken(&self, sparse_index: SparseIndex) -> bool {
-        self.dense_read(sparse_index).is_ok()
+        self.dense_index_read(sparse_index).is_ok()
     }
 
     pub(crate) fn insert(
@@ -502,18 +542,22 @@ impl SparseSet {
 
         unsafe {
             let (dense_index, ptr) = self.tail_push((sparse_index, Generation(0), ptrs));
-            self.dense_write(sparse_index, Some(dense_index));
+            self.sparse_vec_change(sparse_index, dense_index)?;
             Ok(ptr)
         }
     }
 
     pub(crate) fn remove(&mut self, sparse_index: SparseIndex) -> Result<Value, &'static str> {
-        let dense_index = self.dense_read(sparse_index)?;
-        self.sparse[sparse_index] = None;
-        let result =
-            unsafe { self.replace(dense_index, self.content_read(DenseIndex(self.len - 1)))? };
-        self.len -= 1;
-        Ok(result)
+        let dense_index = self.dense_index_read(sparse_index)?;
+        unsafe {
+            self.sparse_vec_off(sparse_index)?;
+            let result = self.tail_replace(dense_index);
+            // sparse alignment
+            let sparse = self.sparse_read(dense_index);
+            self.sparse_vec_change(sparse, dense_index)?;
+            //
+            Ok(result)
+        }
     }
 
     // shallow move
@@ -522,10 +566,10 @@ impl SparseSet {
         from_index: SparseIndex,
         to_index: SparseIndex,
     ) -> Result<Ptr, &'static str> {
-        if self.dense_read(to_index).is_ok() {
+        if self.dense_index_read(to_index).is_ok() {
             return Err("cell occupied");
         } else {
-            let dense_index = self.dense_read(from_index)?;
+            let dense_index = self.dense_index_read(from_index)?;
             self.sparse[to_index] = Some(dense_index);
             let gen = unsafe { self.gen_advance(dense_index) };
             Ok(Ptr::new(to_index, unsafe {
@@ -539,7 +583,7 @@ impl SparseSet {
         sparse_index: SparseIndex,
         ptrs: Ptr,
     ) -> Result<Value, &'static str> {
-        unsafe { self.replace(self.dense_read(sparse_index)?, ptrs) }
+        unsafe { self.replace(self.dense_index_read(sparse_index)?, ptrs) }
     }
 
     // shallow swap of two valid cells
@@ -548,9 +592,9 @@ impl SparseSet {
         sparse_index1: SparseIndex,
         sparse_index2: SparseIndex,
     ) -> Result<(Ptr, Ptr), &'static str> {
-        let dense_index1 = self.dense_read(sparse_index1)?;
+        let dense_index1 = self.dense_index_read(sparse_index1)?;
         let gen1 = unsafe { self.gen_advance(dense_index1) };
-        let dense_index2 = self.dense_read(sparse_index2)?;
+        let dense_index2 = self.dense_index_read(sparse_index2)?;
         let gen2 = unsafe { self.gen_advance(dense_index2) };
         self.sparse[sparse_index1] = Some(dense_index2);
         self.sparse[sparse_index2] = Some(dense_index1);
