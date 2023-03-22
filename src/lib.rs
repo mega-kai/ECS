@@ -121,10 +121,6 @@ impl TypeErasedVec {
         todo!()
     }
 
-    fn push(&mut self, ptrs: *mut u8) {
-        todo!()
-    }
-
     fn double_len(&mut self) {
         todo!()
     }
@@ -160,10 +156,6 @@ impl DenseVec {
         todo!()
     }
 
-    fn push(&mut self, content: (SparseIndex, *mut u8)) {
-        todo!()
-    }
-
     // with tail swap
     fn remove(&mut self, index: DenseIndex) -> (SparseIndex, *mut u8) {
         todo!()
@@ -180,12 +172,12 @@ impl SparseVec {
         todo!()
     }
 
-    // the three functions would panic if sparse index is invalid
-    fn toggle_on(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
+    fn read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
         todo!()
     }
 
-    fn toggle_off(&mut self, sparse_index: SparseIndex) {
+    // the three functions would panic if sparse index is invalid
+    fn toggle_on(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
         todo!()
     }
 
@@ -193,7 +185,7 @@ impl SparseVec {
         todo!()
     }
 
-    fn read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
+    fn toggle_off(&mut self, sparse_index: SparseIndex) {
         todo!()
     }
 }
