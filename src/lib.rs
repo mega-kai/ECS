@@ -224,7 +224,7 @@ impl SparseSet {
         todo!()
     }
 
-    fn insert(&mut self, sparse_index: SparseIndex, val: Value) -> Result<Access, &'static str> {
+    fn write(&mut self, sparse_index: SparseIndex, val: Value) -> Result<Access, &'static str> {
         todo!()
     }
 
@@ -232,11 +232,7 @@ impl SparseSet {
         todo!()
     }
 
-    fn get_cell(&self, sparse_index: SparseIndex) -> Result<Access, &'static str> {
-        todo!()
-    }
-
-    fn get_column(&self) -> Result<Vec<Access>, &'static str> {
+    fn read_all(&self) -> Result<Vec<Access>, &'static str> {
         todo!()
     }
 }
@@ -295,12 +291,7 @@ impl Table {
     }
 
     //-----------------OPERATIONS-----------------//
-    fn insert(
-        &mut self,
-        sparse_index: SparseIndex,
-        // todo: maybe Value??
-        values: Value,
-    ) -> Result<Access, &'static str> {
+    fn write(&mut self, sparse_index: SparseIndex, values: Value) -> Result<Access, &'static str> {
         todo!()
     }
 
