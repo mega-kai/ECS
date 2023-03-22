@@ -320,7 +320,6 @@ impl Table {
     }
 
     //-----------------OPERATIONS-----------------//
-
     fn push(
         &mut self,
         sparse_index: SparseIndex,
@@ -334,7 +333,9 @@ impl Table {
         todo!()
     }
 
-    fn access_cell() {}
+    fn access_cell(&mut self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
+        todo!()
+    }
 }
 
 pub struct Command<'a> {
