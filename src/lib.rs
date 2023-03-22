@@ -256,7 +256,6 @@ impl SparseSet {
         todo!()
     }
 
-    //-----------------MAIN API-----------------//
     fn is_taken(&self, sparse_index: SparseIndex) -> bool {
         todo!()
     }
@@ -269,33 +268,11 @@ impl SparseSet {
         todo!()
     }
 
-    // shallow move
-    fn move_value(
-        &mut self,
-        from_index: SparseIndex,
-        to_index: SparseIndex,
-    ) -> Result<Ptr, &'static str> {
-        todo!()
-    }
-
-    fn replace(&mut self, sparse_index: SparseIndex, ptrs: Ptr) -> Result<Value, &'static str> {
-        todo!()
-    }
-
-    // shallow swap of two valid cells
-    fn swap_within(
-        &mut self,
-        sparse_index1: SparseIndex,
-        sparse_index2: SparseIndex,
-    ) -> Result<(Ptr, Ptr), &'static str> {
-        todo!()
-    }
-
     fn get_cell(&self, sparse_index: SparseIndex) -> Result<Ptr, &'static str> {
         todo!()
     }
 
-    fn get_column(&self) -> () {
+    fn get_column(&self) -> Result<Vec<Ptr>, &'static str> {
         todo!()
     }
 }
