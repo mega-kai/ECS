@@ -229,6 +229,7 @@ impl PtrRow {
     }
 }
 
+//-----------------GENERATION-----------------//
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub(crate) struct Generation(usize);
 impl Generation {
@@ -244,6 +245,10 @@ pub(crate) struct SparseIndex(usize);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
 pub(crate) struct DenseIndex(usize);
+
+//-----------------DENSE VEC-----------------//
+
+//-----------------SPARSE VEC-----------------//
 
 //----------------SPARSE SET------------------//
 pub(crate) struct SparseSet {
