@@ -714,36 +714,4 @@ mod test {
     #[derive(Clone, Debug)]
     struct Player(&'static str);
     impl Component for Player {}
-
-    fn spawn(mut command: Command) {
-        let key = command.add_component(Player("test player uwu"));
-    }
-
-    fn say_hi(mut command: Command) {}
-
-    fn remove(mut command: Command) {
-        // for pl in &mut command.query::<Player, ()>() {
-        //     command.remove_component::<Player>(*pl).unwrap();
-        // }
-        todo!()
-    }
-
-    #[test]
-    fn test() {
-        let mut ecs = ECS::new();
-        ecs.add_system(spawn, 1, true);
-        ecs.add_system(say_hi, 2, false);
-
-        ecs.tick();
-        ecs.tick();
-        ecs.tick();
-        ecs.tick();
-        ecs.tick();
-        ecs.tick();
-        ecs.add_system(remove, 0, true);
-        ecs.tick();
-        ecs.tick();
-        ecs.tick();
-        ecs.tick();
-    }
 }
