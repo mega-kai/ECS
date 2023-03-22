@@ -333,11 +333,16 @@ impl SparseVec {
         todo!()
     }
 
-    fn toggle_on(
-        &mut self,
-        sparse_index: SparseIndex,
-        dense_index_to_write: DenseIndex,
-    ) -> Result<(), &'static str> {
+    // the three functions would panic if sparse index is invalid
+    fn toggle_on(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
+        todo!()
+    }
+
+    fn toggle_off(&mut self, sparse_index: SparseIndex) {
+        todo!()
+    }
+
+    fn toggle_change(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
         todo!()
     }
 }
