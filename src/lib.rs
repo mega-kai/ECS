@@ -246,24 +246,81 @@ pub(crate) struct SparseIndex(usize);
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
 pub(crate) struct DenseIndex(usize);
 
-//-----------------DENSE VEC-----------------//
+//----------------BASIC DATA STRUCTURES------------------//
+pub(crate) struct TypeErasedVec {
+    ptr: *mut u8,
+    len: usize,
+    cap: usize,
+    comp_type: CompType,
+}
 
-//-----------------SPARSE VEC-----------------//
+impl TypeErasedVec {
+    unsafe fn new(comp_type: CompType, size: usize) -> Self {
+        let ptr = alloc(comp_type.layout.repeat(size).unwrap().0);
+        Self {
+            ptr,
+            len: 0,
+            cap: size,
+            comp_type,
+        }
+    }
+
+    unsafe fn push(&mut self, ptrs: *mut u8) {
+        todo!()
+    }
+
+    unsafe fn write(&mut self, index: usize, ptrs: *mut u8) {
+        todo!()
+    }
+
+    unsafe fn read(&mut self, index: usize) -> *mut u8 {
+        todo!()
+    }
+
+    unsafe fn double_len(&mut self) {
+        todo!()
+    }
+}
+
+impl Drop for TypeErasedVec {
+    fn drop(&mut self) {
+        unsafe {
+            dealloc(self.ptr, self.comp_type.layout.repeat(self.cap).unwrap().0);
+        }
+    }
+}
+
+pub(crate) struct DenseVec {
+    sparse_index_vec: TypeErasedVec,
+    comp_vec: TypeErasedVec,
+}
+
+impl DenseVec {
+    unsafe fn new(comp_type: CompType, size: usize) -> Self {
+        Self {
+            sparse_index_vec: TypeErasedVec::new(CompType::new::<SparseIndex>(), size),
+            comp_vec: TypeErasedVec::new(comp_type, size),
+        }
+    }
+}
 
 //----------------SPARSE SET------------------//
 pub(crate) struct SparseSet {
-    sparse: SparseVec,
     comp_type: CompType,
 
-    capacity: usize,
-    len: usize,
-
-    // first is sparse index, second is generation
-    data_heap_ptr: *mut u8,
-    // in bytes
+    // first is dense index, second is generation
+    sparse_ptr: *mut u8,
+    sparse_len: usize,
+    sparse_cap: usize,
     generation_offset: usize,
+    sparse_unit_layout: Layout,
+
+    // first is sparse index, second is content
+    dense_ptr: *mut u8,
+    dense_len: usize,
+    dense_capacity: usize,
     content_offset: usize,
-    unit_layout: Layout,
+    dense_unit_layout: Layout,
 }
 
 impl SparseSet {
@@ -275,11 +332,11 @@ impl SparseSet {
         let data_heap_ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
             comp_type,
-            data_heap_ptr,
-            capacity: size,
-            len: 0,
+            dense_ptr: data_heap_ptr,
+            dense_capacity: size,
+            dense_len: 0,
             sparse: SparseVec::new(size),
-            unit_layout: total_layout,
+            dense_unit_layout: total_layout,
             generation_offset,
             content_offset,
         }
@@ -365,17 +422,17 @@ impl SparseSet {
 
     //-----------------GET PTR-----------------//
     unsafe fn get_ptr_sparse(&self, dense_index: DenseIndex) -> *mut u8 {
-        self.data_heap_ptr
+        self.dense_ptr
             .add(self.comp_type.layout.size() * dense_index.0)
     }
 
     unsafe fn get_ptr_gen(&self, dense_index: DenseIndex) -> *mut u8 {
-        self.data_heap_ptr
+        self.dense_ptr
             .add(self.comp_type.layout.size() * dense_index.0 + self.generation_offset)
     }
 
     unsafe fn get_ptr_content(&self, dense_index: DenseIndex) -> *mut u8 {
-        self.data_heap_ptr
+        self.dense_ptr
             .add(self.comp_type.layout.size() * dense_index.0 + self.content_offset)
     }
 
@@ -416,7 +473,7 @@ impl SparseSet {
 
     //-----------------ALLOCATION-----------------//
     fn ensure_dense_cap(&mut self, extra_slots: usize) {
-        if self.capacity - self.len >= extra_slots {
+        if self.dense_capacity - self.dense_len >= extra_slots {
             self.double_dense_cap();
             self.ensure_dense_cap(extra_slots);
         }
@@ -432,20 +489,20 @@ impl SparseSet {
 
     // todo drop trait
     fn double_dense_cap(&mut self) {
-        let new_capacity = self.capacity * 2;
+        let new_capacity = self.dense_capacity * 2;
         let (new_layout_of_whole_vec, _) = self
-            .unit_layout
+            .dense_unit_layout
             .repeat(new_capacity)
             .expect("could not repeat this layout");
         let new_data_ptr = unsafe {
             realloc(
-                self.data_heap_ptr,
+                self.dense_ptr,
                 new_layout_of_whole_vec,
                 new_layout_of_whole_vec.size(),
             )
         };
-        self.capacity = new_capacity;
-        self.data_heap_ptr = new_data_ptr;
+        self.dense_capacity = new_capacity;
+        self.dense_ptr = new_data_ptr;
     }
 
     //-----------------DENSE CELL HELPERS-----------------//
@@ -583,7 +640,7 @@ impl SparseSet {
 
     pub(crate) fn get_column(&self) -> PtrColumn {
         let mut result = PtrColumn::new_empty(self.comp_type);
-        for index in 0..self.len {
+        for index in 0..self.dense_len {
             let dense_index = DenseIndex(index);
             let ptrs = unsafe { self.content_read(dense_index) };
             result.push(ptrs.to_access());
