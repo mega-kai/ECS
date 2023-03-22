@@ -279,7 +279,6 @@ impl SparseSet {
 
 pub struct Table {
     table: HashMap<CompType, SparseSet>,
-    row_type_cache: HashMap<SparseIndex, ()>,
     bottom_sparse_index: SparseIndex,
 }
 
@@ -288,7 +287,6 @@ impl Table {
     fn new() -> Self {
         Self {
             table: HashMap::new(),
-            row_type_cache: HashMap::new(),
             bottom_sparse_index: SparseIndex(0),
         }
     }
@@ -302,30 +300,10 @@ impl Table {
         self.table.get_mut(&comp_type).unwrap()
     }
 
-    fn get_column(&mut self, comp_type: CompType) -> Result<(), &'static str> {
-        // Ok(self.try_column(comp_type)?.get_column())
-        todo!()
-    }
-
     fn remove_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
         self.table.remove(&comp_type)
     }
 
-    //-----------------ROW MANIPULATION-----------------//
-    fn new_row(&mut self) -> SparseIndex {
-        let result = self.bottom_sparse_index;
-        // todo cache
-        self.bottom_sparse_index.0 += 1;
-        result
-    }
-
-    fn get_row(&mut self, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        // since init row ensures the existence of all row cache
-        // todo cache
-        todo!()
-    }
-
-    //-----------------HELPERS-----------------//
     fn try_column(&mut self, comp_type: CompType) -> Result<&mut SparseSet, &'static str> {
         if let Some(access) = self.table.get_mut(&comp_type) {
             Ok(access)
@@ -340,6 +318,18 @@ impl Table {
             .or_insert(SparseSet::new(comp_type, 64))
     }
 
+    //-----------------ROW MANIPULATION-----------------//
+    fn new_row(&mut self) -> SparseIndex {
+        let result = self.bottom_sparse_index;
+        // todo cache
+        self.bottom_sparse_index.0 += 1;
+        result
+    }
+
+    fn remove_row(&mut self, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        todo!()
+    }
+
     //-----------------CELL IO OPERATION-----------------//
 
     // if not column init, init it automatically
@@ -347,21 +337,12 @@ impl Table {
         &mut self,
         sparse_index: SparseIndex,
         // todo: maybe Value??
-        values: Ptr,
+        values: Value,
     ) -> Result<Ptr, &'static str> {
         todo!()
     }
 
     fn pop_cell(&mut self, access: Ptr) -> Result<Value, &'static str> {
-        todo!()
-    }
-
-    fn replace_cell(
-        &mut self,
-        access: Ptr,
-        // todo maybe value?
-        values: Ptr,
-    ) -> Result<Value, &'static str> {
         todo!()
     }
 
