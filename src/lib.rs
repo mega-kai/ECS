@@ -57,9 +57,15 @@ pub trait Component: Clone + 'static {
     }
 }
 
+pub struct Access {
+    ptr: Ptr,
+    sparse_index: SparseIndex,
+    generation: Generation,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // this is for content, not generation or sparse index
-pub struct Ptr {
+struct Ptr {
     ptr: *mut u8,
     comp_type: CompType,
 }
@@ -341,20 +347,20 @@ impl<'a> Command<'a> {
         Self { table }
     }
 
-    pub fn add_component<C: Component>(&mut self, mut component: C) -> Ptr {
+    pub fn add_component<C: Component>(&mut self, mut component: C) -> Access {
         todo!()
     }
 
     // key or entity index? usize or generational index?
     pub fn attach_component<C: Component>(
         &mut self,
-        key: Ptr,
+        key: Access,
         mut component: C,
-    ) -> Result<Ptr, &'static str> {
+    ) -> Result<Access, &'static str> {
         todo!()
     }
 
-    pub fn remove_component<C: Component>(&mut self, key: Ptr) -> Result<C, &'static str> {
+    pub fn remove_component<C: Component>(&mut self, key: Access) -> Result<C, &'static str> {
         todo!()
     }
 
