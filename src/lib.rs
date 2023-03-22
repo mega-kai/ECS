@@ -255,8 +255,8 @@ pub(crate) struct TypeErasedVec {
 }
 
 impl TypeErasedVec {
-    unsafe fn new(comp_type: CompType, size: usize) -> Self {
-        let ptr = alloc(comp_type.layout.repeat(size).unwrap().0);
+    fn new(comp_type: CompType, size: usize) -> Self {
+        let ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
             ptr,
             len: 0,
@@ -265,19 +265,20 @@ impl TypeErasedVec {
         }
     }
 
-    unsafe fn push(&mut self, ptrs: *mut u8) {
+    fn read(&mut self, index: usize) -> *mut u8 {
         todo!()
     }
 
-    unsafe fn write(&mut self, index: usize, ptrs: *mut u8) {
+    fn write(&mut self, index: usize, ptrs: *mut u8) {
+        // would automatically adjust length by recursively doubling its own length
         todo!()
     }
 
-    unsafe fn read(&mut self, index: usize) -> *mut u8 {
+    fn push(&mut self, ptrs: *mut u8) {
         todo!()
     }
 
-    unsafe fn double_len(&mut self) {
+    fn double_len(&mut self) {
         todo!()
     }
 }
@@ -296,7 +297,7 @@ pub(crate) struct DenseVec {
 }
 
 impl DenseVec {
-    unsafe fn new(comp_type: CompType, size: usize) -> Self {
+    fn new(comp_type: CompType, size: usize) -> Self {
         let result = Self {
             sparse_index_vec: TypeErasedVec::new(CompType::new::<SparseIndex>(), size),
             comp_vec: TypeErasedVec::new(comp_type, size),
@@ -304,7 +305,41 @@ impl DenseVec {
         todo!()
     }
 
-    unsafe fn push(&mut self, ptr: *mut u8) {}
+    fn read(&mut self, index: DenseIndex) -> (SparseIndex, *mut u8) {
+        todo!()
+    }
+
+    fn write(&mut self, index: DenseIndex, content: (SparseIndex, *mut u8)) {
+        todo!()
+    }
+
+    fn push(&mut self, content: (SparseIndex, *mut u8)) {
+        todo!()
+    }
+
+    // with tail swap
+    fn remove(&mut self, index: DenseIndex) -> (SparseIndex, *mut u8) {
+        todo!()
+    }
+}
+
+pub(crate) struct SparseVec {
+    dense_index_vec: TypeErasedVec,
+    generation_vec: TypeErasedVec,
+}
+
+impl SparseVec {
+    fn new() -> Self {
+        todo!()
+    }
+
+    fn toggle_on(
+        &mut self,
+        sparse_index: SparseIndex,
+        dense_index_to_write: DenseIndex,
+    ) -> Result<(), &'static str> {
+        todo!()
+    }
 }
 
 //----------------SPARSE SET------------------//
