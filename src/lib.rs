@@ -282,7 +282,7 @@ impl Table {
         todo!()
     }
 
-    //-----------------OPERATIONS-----------------//
+    //-----------------BASIC OPERATIONS-----------------//
     fn write(&mut self, sparse_index: SparseIndex, values: Value) -> Result<Access, &'static str> {
         todo!()
     }
