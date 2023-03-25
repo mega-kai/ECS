@@ -40,7 +40,7 @@ struct CompType {
     layout: Layout,
 }
 impl CompType {
-    const fn new<C: 'static>() -> Self {
+    const fn new<C: 'static + Clone>() -> Self {
         Self {
             type_id: TypeId::of::<C>(),
             layout: Layout::new::<C>(),
@@ -190,11 +190,43 @@ impl SparseVec {
     }
 }
 
+#[derive(PartialEq, Eq)]
 struct Access {
     ptr: *mut u8,
     comp_type: CompType,
     sparse_index: SparseIndex,
     generation: Generation,
+}
+
+struct AccessSlice {
+    vec: Vec<Access>,
+}
+
+impl AccessSlice {
+    fn new() -> Self {
+        todo!()
+    }
+
+    //-----------------QUERY BASICS-----------------//
+    // only leave the same access (sparse, ptr, generation, type) in the result vec
+    fn intersection(&mut self, vec: Self) -> Self {
+        todo!("remember iterate with self with the sparse index, make sure the row index matches before comparing")
+    }
+
+    // only leave the different accesses and one copy of the overlapsing accesses in the two vectors
+    fn union(&mut self, vec: Self) -> Self {
+        todo!()
+    }
+
+    // only leave the different accesses in the two vectors
+    fn union_minus_intersection(&mut self, vec: Self) -> Self {
+        todo!()
+    }
+
+    // only leave the different accesses in self; filter without
+    fn self_minus_intersection(&mut self, vec: Self) -> Self {
+        todo!()
+    }
 }
 
 struct SparseSet {
@@ -283,11 +315,13 @@ impl Table {
     }
 
     //-----------------BASIC OPERATIONS-----------------//
-    fn write(&mut self, sparse_index: SparseIndex, values: Value) -> Result<Access, &'static str> {
+    fn write(&mut self, sparse_index: SparseIndex, value: Value) -> Result<Access, &'static str> {
+        self.cache_add(sparse_index, value.comp_type);
         todo!()
     }
 
     fn remove(&mut self, access: Access) -> Result<Value, &'static str> {
+        self.cache_remove(access.sparse_index, access.comp_type);
         todo!()
     }
 
@@ -295,21 +329,49 @@ impl Table {
         todo!()
     }
 
-    //-----------------QUERY-----------------//
-    fn query() {}
+    //-----------------CACHE-----------------//
+    fn cache_add(&mut self, sparse_index: SparseIndex, comp_type: CompType) {
+        // panics if the type is already added
+    }
+
+    fn cache_remove(&mut self, sparse_index: SparseIndex, comp_type: CompType) {
+        // panics if the type is not in this sparse index
+    }
+
+    fn cache_if_contains(&mut self, sparse_index: SparseIndex, comp_type: CompType) -> bool {
+        todo!()
+    }
+
+    //-----------------COLUMN YIELD-----------------//
+    fn get_column(&mut self, comp_type: CompType) -> AccessSlice {
+        todo!("yield empty if column type is invalid")
+    }
 }
 
-struct Command<'a> {
-    table: &'a mut Table,
+struct Command {
+    table: *mut Table,
 }
 
-// TODO: turns the api into wrapper functions of those in impl ComponentTable
-impl<'a> Command<'a> {
-    fn new(table: &'a mut Table) -> Self {
+impl Command {
+    fn new(table: &mut Table) -> Self {
         Self { table }
     }
 
-    fn new_entity_with_component(&mut self) {}
+    fn new_row(&mut self) -> Row {
+        todo!()
+    }
+}
+
+struct Row {
+    table: *mut Table,
+}
+
+impl Row {
+    fn new() -> Self {
+        todo!()
+    }
+
+    fn add_component<T: 'static + Clone>(&mut self, comps: &[T]) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -319,6 +381,7 @@ enum ExecutionFrequency {
     Once(bool),
     // Timed(f64, f64),
 }
+
 struct System {
     order: usize,
     frequency: ExecutionFrequency,
