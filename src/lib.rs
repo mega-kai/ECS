@@ -15,13 +15,14 @@
 )]
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::hash_map;
+use std::collections::vec_deque::IntoIter;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
-use std::ops::{Add, Index, IndexMut, Range, RangeBounds};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Index, IndexMut, Not, Range, RangeBounds};
 use std::ptr::copy;
-use std::slice::SliceIndex;
+use std::slice::{Iter, SliceIndex};
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -31,10 +32,11 @@ use std::{
 
 // TODO: check to properly drop all manually init memory
 
+//-----------------STORAGE-----------------//
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CompType {
     type_id: TypeId,
     layout: Layout,
@@ -46,6 +48,12 @@ impl CompType {
             layout: Layout::new::<C>(),
         }
     }
+}
+
+#[derive(Clone)]
+struct Ptr {
+    ptr: *mut u8,
+    comp_type: CompType,
 }
 
 #[derive(Clone)]
@@ -191,42 +199,11 @@ impl SparseVec {
 }
 
 #[derive(PartialEq, Eq)]
-struct Access {
+struct AccessCell {
     ptr: *mut u8,
     comp_type: CompType,
     sparse_index: SparseIndex,
     generation: Generation,
-}
-
-struct AccessSlice {
-    vec: Vec<Access>,
-}
-
-impl AccessSlice {
-    fn new() -> Self {
-        todo!()
-    }
-
-    //-----------------QUERY BASICS-----------------//
-    // only leave the same access (sparse, ptr, generation, type) in the result vec
-    fn intersection(&mut self, vec: Self) -> Self {
-        todo!("remember iterate with self with the sparse index, make sure the row index matches before comparing")
-    }
-
-    // only leave the different accesses and one copy of the overlapsing accesses in the two vectors
-    fn union(&mut self, vec: Self) -> Self {
-        todo!()
-    }
-
-    // only leave the different accesses in the two vectors
-    fn union_minus_intersection(&mut self, vec: Self) -> Self {
-        todo!()
-    }
-
-    // only leave the different accesses in self; filter without
-    fn self_minus_intersection(&mut self, vec: Self) -> Self {
-        todo!()
-    }
 }
 
 struct SparseSet {
@@ -244,11 +221,11 @@ impl SparseSet {
         todo!()
     }
 
-    fn read(&self, sparse_index: SparseIndex) -> Result<Access, &'static str> {
+    fn read(&self, sparse_index: SparseIndex) -> Result<AccessCell, &'static str> {
         todo!()
     }
 
-    fn write(&mut self, sparse_index: SparseIndex, val: Value) -> Result<Access, &'static str> {
+    fn write(&mut self, sparse_index: SparseIndex, ptr: Ptr) -> Result<AccessCell, &'static str> {
         todo!()
     }
 
@@ -256,7 +233,7 @@ impl SparseSet {
         todo!()
     }
 
-    fn read_all(&self) -> Result<Vec<Access>, &'static str> {
+    fn read_all(&self) -> Result<Vec<AccessCell>, &'static str> {
         todo!()
     }
 }
@@ -315,17 +292,17 @@ impl Table {
     }
 
     //-----------------BASIC OPERATIONS-----------------//
-    fn write(&mut self, sparse_index: SparseIndex, value: Value) -> Result<Access, &'static str> {
-        self.cache_add(sparse_index, value.comp_type);
+    fn write(&mut self, sparse_index: SparseIndex, ptr: Ptr) -> Result<AccessCell, &'static str> {
+        self.cache_add(sparse_index, ptr.comp_type);
         todo!()
     }
 
-    fn remove(&mut self, access: Access) -> Result<Value, &'static str> {
+    fn remove(&mut self, access: AccessCell) -> Result<Value, &'static str> {
         self.cache_remove(access.sparse_index, access.comp_type);
         todo!()
     }
 
-    fn read(&mut self, sparse_index: SparseIndex) -> Result<Access, &'static str> {
+    fn read(&mut self, sparse_index: SparseIndex) -> Result<AccessCell, &'static str> {
         todo!()
     }
 
@@ -343,7 +320,7 @@ impl Table {
     }
 
     //-----------------COLUMN YIELD-----------------//
-    fn get_column(&mut self, comp_type: CompType) -> AccessSlice {
+    fn get_column(&mut self, comp_type: CompType) -> Vec<AccessCell> {
         todo!("yield empty if column type is invalid")
     }
 }
@@ -357,23 +334,118 @@ impl Command {
         Self { table }
     }
 
-    fn new_row(&mut self) -> Row {
+    // variadic components
+    fn new_row<C: 'static + Clone>(&mut self, comps: C) -> SparseIndex {
+        todo!()
+    }
+
+    // if you wanna append more components to a certain row, you must do it while iterating over the
+
+    fn query<C>(&mut self, filter: Filter) -> QueryResult<C>
+    where
+        C: CompRef,
+    {
+        // how do i redesign the comptype so that i holds all the filter information; or retain the discreet filter types plus their logical
+        // relations so i can query single comp vec and apply vec logic ops again
         todo!()
     }
 }
 
-struct Row {
-    table: *mut Table,
+enum Operations {
+    Has(CompType),
+    Not(CompType),
+    And(CompType),
+    Or(CompType),
+    Xor(CompType),
 }
 
-impl Row {
-    fn new() -> Self {
+struct Filter {
+    head: CompType,
+    ops: Vec<Operations>,
+}
+impl Filter {
+    const fn new<T: 'static + Clone>() -> Self {
+        Self {
+            head: CompType::new::<T>(),
+            ops: vec![],
+        }
+    }
+}
+
+struct QueryResult<C: CompRef> {
+    phantom: PhantomData<C>,
+    accesses: Vec<AccessCell>,
+}
+impl<C: CompRef> IntoIterator for QueryResult<C> {
+    type Item = C;
+
+    type IntoIter = IntoIter<C>;
+
+    fn into_iter(self) -> Self::IntoIter {
         todo!()
     }
-
-    fn add_component<T: 'static + Clone>(&mut self, comps: &[T]) {}
 }
 
+trait CompRef {}
+impl<C> CompRef for &C where C: 'static + Clone {}
+impl<C> CompRef for &mut C where C: 'static + Clone {}
+
+impl BitAnd for Filter {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        todo!()
+    }
+}
+impl BitOr for Filter {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        todo!()
+    }
+}
+impl BitXor for Filter {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        todo!()
+    }
+}
+impl Not for Filter {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        todo!()
+    }
+}
+
+//-----------------QUERY BASICS-----------------//
+// A & B; AND
+fn intersection(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
+    todo!("remember iterate with self with the sparse index, make sure the row index matches before comparing")
+}
+
+// A | B; OR
+fn union(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
+    todo!()
+}
+
+// !A; NOT
+fn complement(vec1: Vec<AccessCell>) -> Vec<AccessCell> {
+    todo!()
+}
+
+// (A | B) & (!A | !B); XOR
+fn union_minus_intersection(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
+    todo!()
+}
+
+// A & !B
+fn complement_second_within_first(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
+    todo!()
+}
+
+//-----------------SCHEDULER-----------------//
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[non_exhaustive]
 enum ExecutionFrequency {
@@ -510,10 +582,26 @@ mod test {
 
     #[derive(Clone)]
     struct Health(i32);
+    const HEALTH: Filter = Filter::new::<Health>();
 
     #[derive(Clone, Debug)]
     struct Mana(i32);
+    const MANA: Filter = Filter::new::<Mana>();
 
     #[derive(Clone, Debug)]
     struct Player(&'static str);
+    const PLAYER: Filter = Filter::new::<Player>();
+
+    #[derive(Clone, Debug)]
+    struct Enemy(&'static str);
+    const ENEMY: Filter = Filter::new::<Enemy>();
+
+    const NULL: Filter = Filter::new::<()>();
+
+    fn test(mut com: Command) {
+        let query_one = com.query::<&Health>(NULL);
+        for val in query_one {}
+        let query_two = com.query::<&mut Player>(!ENEMY & (HEALTH | MANA));
+        for val in query_two {}
+    }
 }
