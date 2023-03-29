@@ -36,7 +36,7 @@ use std::{
 const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
 const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct CompType {
     type_id: TypeId,
     layout: Layout,
@@ -341,34 +341,13 @@ impl Command {
 
     // if you wanna append more components to a certain row, you must do it while iterating over the
 
-    fn query<C>(&mut self, filter: Filter) -> QueryResult<C>
+    fn query<C>(&mut self, ops: LinkedOps) -> QueryResult<C>
     where
         C: CompRef,
     {
         // how do i redesign the comptype so that i holds all the filter information; or retain the discreet filter types plus their logical
         // relations so i can query single comp vec and apply vec logic ops again
         todo!()
-    }
-}
-
-enum Operations {
-    Has(CompType),
-    Not(CompType),
-    And(CompType),
-    Or(CompType),
-    Xor(CompType),
-}
-
-struct Filter {
-    head: CompType,
-    ops: Vec<Operations>,
-}
-impl Filter {
-    const fn new<T: 'static + Clone>() -> Self {
-        Self {
-            head: CompType::new::<T>(),
-            ops: vec![],
-        }
     }
 }
 
@@ -386,40 +365,100 @@ impl<C: CompRef> IntoIterator for QueryResult<C> {
     }
 }
 
-trait CompRef {}
-impl<C> CompRef for &C where C: 'static + Clone {}
-impl<C> CompRef for &mut C where C: 'static + Clone {}
+#[derive(Debug)]
+struct LinkedOps {
+    comp_type: WithOrWithout,
+    cache: Ops,
+}
+impl LinkedOps {
+    const fn new<T: 'static + Clone>() -> Self {
+        Self {
+            comp_type: WithOrWithout::With(CompType::new::<T>()),
+            cache: Ops::new(),
+        }
+    }
+}
 
-impl BitAnd for Filter {
-    type Output = Self;
+#[derive(Debug, Clone)]
+enum WithOrWithout {
+    With(CompType),
+    // not op should always have highest precedence, and each after that should have a lower one
+    Without(CompType),
+}
 
-    fn bitand(self, rhs: Self) -> Self::Output {
+#[derive(Debug, Clone)]
+enum Operation {
+    // precedence
+    And(WithOrWithout),
+    Xor(WithOrWithout),
+    Or(WithOrWithout),
+}
+impl Operation {
+    fn get_type(&self) -> CompType {
         todo!()
     }
 }
-impl BitOr for Filter {
+
+#[derive(Debug, Clone)]
+struct Ops(Vec<Operation>);
+impl Ops {
+    const fn new() -> Self {
+        Self(vec![])
+    }
+}
+
+fn is_linked_ops_single(ops: &LinkedOps) -> bool {
+    todo!()
+}
+
+// gist of things: negation first; then applying left to right
+impl BitAnd for LinkedOps {
     type Output = Self;
 
-    fn bitor(self, rhs: Self) -> Self::Output {
+    fn bitand(mut self, mut rhs: Self) -> Self::Output {
+        // self will always be single
+        if is_linked_ops_single(&rhs) {
+            self.cache.0.push(Operation::And(rhs.comp_type));
+            return self;
+        } else {
+            rhs.cache.0.push(Operation::And(self.comp_type));
+            return rhs;
+        }
+    }
+}
+impl BitOr for LinkedOps {
+    type Output = Self;
+
+    fn bitor(mut self, mut rhs: Self) -> Self::Output {
         todo!()
     }
 }
-impl BitXor for Filter {
+impl BitXor for LinkedOps {
     type Output = Self;
 
-    fn bitxor(self, rhs: Self) -> Self::Output {
+    fn bitxor(mut self, mut rhs: Self) -> Self::Output {
         todo!()
     }
 }
-impl Not for Filter {
+
+impl Not for LinkedOps {
     type Output = Self;
 
-    fn not(self) -> Self::Output {
-        todo!()
+    fn not(mut self) -> Self::Output {
+        Self {
+            comp_type: match self.comp_type {
+                WithOrWithout::With(val) => WithOrWithout::Without(val),
+                WithOrWithout::Without(_) => {
+                    panic!("this shouldn't happen, as negation operator is always applied first")
+                }
+            },
+            cache: self.cache,
+        }
     }
 }
 
 //-----------------QUERY BASICS-----------------//
+
 // A & B; AND
 fn intersection(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
     todo!("remember iterate with self with the sparse index, make sure the row index matches before comparing")
@@ -440,10 +479,9 @@ fn union_minus_intersection(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec
     todo!()
 }
 
-// A & !B
-fn complement_second_within_first(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
-    todo!()
-}
+trait CompRef {}
+impl<C> CompRef for &C where C: 'static + Clone {}
+impl<C> CompRef for &mut C where C: 'static + Clone {}
 
 //-----------------SCHEDULER-----------------//
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -582,26 +620,26 @@ mod test {
 
     #[derive(Clone)]
     struct Health(i32);
-    const HEALTH: Filter = Filter::new::<Health>();
+    const HEALTH: LinkedOps = LinkedOps::new::<Health>();
 
     #[derive(Clone, Debug)]
     struct Mana(i32);
-    const MANA: Filter = Filter::new::<Mana>();
+    const MANA: LinkedOps = LinkedOps::new::<Mana>();
 
     #[derive(Clone, Debug)]
     struct Player(&'static str);
-    const PLAYER: Filter = Filter::new::<Player>();
+    const PLAYER: LinkedOps = LinkedOps::new::<Player>();
 
     #[derive(Clone, Debug)]
     struct Enemy(&'static str);
-    const ENEMY: Filter = Filter::new::<Enemy>();
+    const ENEMY: LinkedOps = LinkedOps::new::<Enemy>();
 
-    const NULL: Filter = Filter::new::<()>();
+    const NULL: LinkedOps = LinkedOps::new::<()>();
 
     fn test(mut com: Command) {
         let query_one = com.query::<&Health>(NULL);
         for val in query_one {}
-        let query_two = com.query::<&mut Player>(!ENEMY & (HEALTH | MANA));
+        let query_two = com.query::<&mut Player>(PLAYER ^ !ENEMY & (HEALTH | MANA));
         for val in query_two {}
     }
 }
