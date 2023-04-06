@@ -17,7 +17,6 @@
 use std::alloc::{alloc, dealloc, realloc};
 use std::hash::Hash;
 use std::ops::{BitAnd, BitOr, BitXor, Not};
-use std::ptr::copy;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{
     alloc::Layout,
@@ -62,37 +61,6 @@ impl Debug for CompType {
     }
 }
 
-#[derive(Clone)]
-struct Value {
-    ptr: *mut u8,
-    comp_type: CompType,
-}
-impl Value {
-    fn new(src_ptr: *mut u8, comp_type: CompType) -> Self {
-        unsafe {
-            let ptr = alloc(comp_type.layout);
-            std::ptr::copy(src_ptr, ptr, comp_type.layout.size());
-            Self { ptr, comp_type }
-        }
-    }
-
-    fn cast<T: Component>(self) -> Result<T, &'static str> {
-        if self.comp_type != CompType::new::<T>() {
-            return Err("type not matching");
-        } else {
-            Ok(unsafe { self.ptr.cast::<T>().as_ref().unwrap().clone() })
-        }
-    }
-}
-
-impl Drop for Value {
-    fn drop(&mut self) {
-        unsafe {
-            dealloc(self.ptr, self.comp_type.layout);
-        }
-    }
-}
-
 struct TypeErasedVec {
     ptr: *mut u8,
     len: usize,
@@ -101,41 +69,29 @@ struct TypeErasedVec {
 }
 
 impl TypeErasedVec {
-    fn new_empty(comp_type: CompType, size: usize) -> Self {
+    fn new_empty<C: 'static + Clone + Sized>(cap: usize) -> Self {
+        let comp_type = CompType::new::<C>();
         if comp_type.layout.size() == 0 {
             panic!("zst")
         }
-        let ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
+        let ptr = unsafe { alloc(comp_type.layout.repeat(cap).unwrap().0) };
         Self {
             ptr,
             len: 0,
-            cap: size,
+            cap,
             comp_type,
         }
     }
 
-    unsafe fn read(&self, index: usize) -> *mut u8 {
-        if index >= self.len {
-            panic!("outta bound")
+    unsafe fn resize<C: 'static + Clone + Sized>(&mut self, size: usize, default_value: C) {
+        if self.len < size {
+            self.ensure_cap(size + 1);
+            for num in self.len..size {
+                *self.ptr.add(self.comp_type.layout.size() * num).cast::<C>() =
+                    default_value.clone();
+            }
         }
-        self.ptr.add(index * self.comp_type.layout.size())
-    }
-
-    unsafe fn write(&mut self, index: usize, ptrs: *mut u8) {
-        if index >= self.len {
-            panic!("outta bound")
-        }
-        copy(ptrs, self.read(index), self.comp_type.layout.size())
-    }
-
-    unsafe fn push(&mut self, ptrs: *mut u8) -> *mut u8 {
-        if self.len >= self.cap {
-            self.double_cap();
-        }
-        let ptr = self.read(self.len);
-        copy(ptrs, ptr, self.comp_type.layout.size());
-        self.len += 1;
-        ptr
+        self.len = size;
     }
 
     unsafe fn ensure_cap(&mut self, cap: usize) {
@@ -143,18 +99,14 @@ impl TypeErasedVec {
             panic!("zero")
         }
         if cap > self.cap {
-            self.double_cap();
+            self.ptr = realloc(
+                self.ptr,
+                self.comp_type.layout.repeat(self.len).unwrap().0,
+                self.cap * 2 * self.comp_type.layout.size(),
+            );
+            self.cap *= 2;
             self.ensure_cap(cap);
         }
-    }
-
-    unsafe fn double_cap(&mut self) {
-        self.ptr = realloc(
-            self.ptr,
-            self.comp_type.layout.repeat(self.len).unwrap().0,
-            self.cap * 2 * self.comp_type.layout.size(),
-        );
-        self.cap *= 2;
     }
 
     unsafe fn as_ref<C: 'static + Clone + Sized>(&self) -> &[C] {
@@ -188,56 +140,16 @@ struct DenseVec {
 }
 
 impl DenseVec {
-    fn new_empty(comp_type: CompType, size: usize) -> Self {
+    fn new_empty<C: Component>(cap: usize) -> Self {
         let result = Self {
-            sparse_index_vec: TypeErasedVec::new_empty(CompType::new::<SparseIndex>(), size),
-            comp_vec: TypeErasedVec::new_empty(comp_type, size),
+            sparse_index_vec: TypeErasedVec::new_empty::<SparseIndex>(cap),
+            comp_vec: TypeErasedVec::new_empty::<C>(cap),
         };
         result
     }
 
-    fn read(&self, index: DenseIndex) -> Result<(SparseIndex, *mut u8), &'static str> {
-        if index >= self.sparse_index_vec.len {
-            return Err("outta bound");
-        } else {
-            unsafe {
-                Ok((
-                    self.sparse_index_vec
-                        .read(index)
-                        .cast::<SparseIndex>()
-                        .as_ref()
-                        .unwrap()
-                        .clone(),
-                    self.comp_vec.read(index),
-                ))
-            }
-        }
-    }
-
-    fn write(
-        &mut self,
-        index: DenseIndex,
-        mut content: (SparseIndex, *mut u8),
-    ) -> Result<(), &'static str> {
-        if index >= self.sparse_index_vec.len {
-            return Err("outta bound");
-        } else {
-            unsafe {
-                self.sparse_index_vec
-                    .write(index, &mut content.0 as *mut SparseIndex as *mut u8);
-                self.comp_vec.write(index, content.1)
-            }
-            Ok(())
-        }
-    }
-
-    fn push(&mut self, mut content: (SparseIndex, *mut u8)) -> (DenseIndex, *mut u8) {
-        unsafe {
-            self.sparse_index_vec
-                .push(&mut content.0 as *mut SparseIndex as *mut u8);
-            let ptr = self.comp_vec.push(content.1);
-            (self.comp_vec.len - 1, ptr)
-        }
+    fn push<C: Component>(&mut self, mut content: (SparseIndex, C)) -> (DenseIndex, &mut C) {
+        todo!()
     }
 
     // with tail swap
@@ -248,16 +160,10 @@ impl DenseVec {
         let thing = self.as_ref::<C>();
         let result_thing = (thing.1[dense_index], thing.0[dense_index].clone());
 
-        let dense = self.sparse_index_vec.len - 1;
-        if dense_index < dense {
-            let another = self.read(dense)?;
-            self.write(dense_index, another)?;
-        }
-
         self.sparse_index_vec.len -= 1;
         self.comp_vec.len -= 1;
 
-        Ok(result_thing)
+        todo!()
     }
 
     fn as_ref<C: 'static + Clone + Sized>(&self) -> (&[C], &[SparseIndex]) {
@@ -274,14 +180,18 @@ struct SparseVec {
 }
 
 impl SparseVec {
-    fn new(size: usize) -> Self {
-        if size == 0 {
+    fn new(cap: usize) -> Self {
+        if cap == 0 {
             panic!("zero sized")
         }
         let mut thing = Self {
-            dense_index_vec: TypeErasedVec::new_empty(CompType::new::<Option<DenseIndex>>(), size),
+            dense_index_vec: TypeErasedVec::new_empty::<Option<DenseIndex>>(cap),
         };
-        thing.populate_with_default();
+        unsafe {
+            thing
+                .dense_index_vec
+                .resize::<Option<DenseIndex>>(cap, None)
+        };
         thing
     }
 
@@ -290,7 +200,7 @@ impl SparseVec {
         sparse_index: SparseIndex,
         dense_index_to_write: DenseIndex,
     ) -> Result<(), &'static str> {
-        self.ensure_cap_by_doubling(sparse_index);
+        unsafe { self.dense_index_vec.ensure_cap(sparse_index) };
         if let None = self.as_mut()[sparse_index] {
             self.as_mut()[sparse_index] = Some(dense_index_to_write);
             Ok(())
@@ -299,51 +209,13 @@ impl SparseVec {
         }
     }
 
-    fn toggle_change(
-        &mut self,
-        sparse_index: SparseIndex,
-        dense_index_to_write: DenseIndex,
-    ) -> Result<(), &'static str> {
-        self.ensure_cap_by_doubling(sparse_index);
-        if let Some(_) = self.as_mut()[sparse_index] {
-            self.as_mut()[sparse_index] = Some(dense_index_to_write);
-            Ok(())
-        } else {
-            Err("sparse not yet taken")
-        }
-    }
-
     fn toggle_off(&mut self, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        self.ensure_cap_by_doubling(sparse_index);
+        unsafe { self.dense_index_vec.ensure_cap(sparse_index) };
         if let Some(_) = self.as_mut()[sparse_index] {
             self.as_mut()[sparse_index] = None;
             Ok(())
         } else {
             Err("sparse not yet taken")
-        }
-    }
-
-    fn ensure_cap_by_doubling(&mut self, cap: usize) {
-        if cap == 0 {
-            panic!("zero")
-        }
-        if cap >= self.dense_index_vec.cap {
-            unsafe {
-                self.dense_index_vec.ensure_cap(cap);
-            }
-            self.populate_with_default();
-        }
-    }
-
-    fn populate_with_default(&mut self) {
-        if self.dense_index_vec.len < self.dense_index_vec.cap {
-            for num in self.dense_index_vec.len..self.dense_index_vec.cap {
-                unsafe {
-                    self.dense_index_vec.len += 1;
-                    self.dense_index_vec
-                        .write(num, &mut None as *mut Option<DenseIndex> as *mut u8);
-                }
-            }
         }
     }
 
@@ -363,29 +235,23 @@ struct SparseSet {
 }
 
 impl SparseSet {
-    fn new(comp_type: CompType, size: usize) -> Self {
+    fn new<C: Component>(cap: usize) -> Self {
         Self {
-            comp_type,
-            dense_vec: DenseVec::new_empty(comp_type, size),
-            sparse_vec: SparseVec::new(size),
+            comp_type: CompType::new::<C>(),
+            dense_vec: DenseVec::new_empty::<C>(cap),
+            sparse_vec: SparseVec::new(cap),
         }
     }
 
-    fn insert(
+    fn insert<C: Component>(
         &mut self,
         sparse_index: SparseIndex,
-        ptr: *mut u8,
-    ) -> Result<AccessCell, &'static str> {
+        value: C,
+    ) -> Result<(), &'static str> {
         if let Some(_) = self.sparse_vec.as_ref()[sparse_index] {
             Err("sparse already taken")
         } else {
-            let (dense_index, result_ptr) = self.dense_vec.push((sparse_index, ptr));
-            self.sparse_vec.toggle_on(sparse_index, dense_index)?;
-            Ok(AccessCell {
-                ptr: result_ptr,
-                comp_type: self.comp_type,
-                sparse_index,
-            })
+            todo!()
         }
     }
 
@@ -414,18 +280,18 @@ impl Table {
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    fn ensure_column(&mut self, comp_type: CompType) -> &mut SparseSet {
+    fn ensure_column<C: Component>(&mut self, comp_type: CompType) -> &mut SparseSet {
         self.table
             .entry(comp_type)
-            .or_insert(SparseSet::new(comp_type, 64))
+            .or_insert(SparseSet::new::<C>(64))
     }
 
-    fn remove_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
-        self.table.remove(&comp_type)
+    fn remove_column<C: Component>(&mut self) -> Option<SparseSet> {
+        self.table.remove(&CompType::new::<C>())
     }
 
-    fn try_column(&mut self, comp_type: CompType) -> Result<&mut SparseSet, &'static str> {
-        if let Some(access) = self.table.get_mut(&comp_type) {
+    fn try_column<C: Component>(&mut self) -> Result<&mut SparseSet, &'static str> {
+        if let Some(access) = self.table.get_mut(&CompType::new::<C>()) {
             Ok(access)
         } else {
             Err("no such type/column")
@@ -442,26 +308,25 @@ impl Table {
     // for rn it only extends the row, will not deallocate any row
 
     //-----------------BASIC OPERATIONS-----------------//
-    fn insert(
+    fn insert<C: Component>(
         &mut self,
         sparse_index: SparseIndex,
-        ptr: *mut u8,
-        comp_type: CompType,
-    ) -> Result<AccessCell, &'static str> {
-        self.try_column(comp_type)?.insert(sparse_index, ptr)
+        value: C,
+    ) -> Result<(), &'static str> {
+        self.try_column::<C>()?.insert(sparse_index, value)
     }
 
     fn remove<C: Component>(&mut self, sparse_index: SparseIndex) -> Result<C, &'static str> {
-        self.try_column(CompType::new::<C>())?.remove(sparse_index)
+        self.try_column::<C>()?.remove(sparse_index)
     }
 
     //-----------------COLUMN YIELD-----------------//
     fn as_ref<C: Component>(&mut self) -> Result<(&[C], &[SparseIndex]), &'static str> {
-        Ok(self.try_column(CompType::new::<C>())?.dense_vec.as_ref())
+        Ok(self.try_column::<C>()?.dense_vec.as_ref())
     }
 
     fn as_mut<C: Component>(&mut self) -> Result<(&mut [C], &mut [SparseIndex]), &'static str> {
-        Ok(self.try_column(CompType::new::<C>())?.dense_vec.as_mut())
+        Ok(self.try_column::<C>()?.dense_vec.as_mut())
     }
 }
 
@@ -475,11 +340,7 @@ where
     C0: Component,
 {
     fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        let thing = table.insert(
-            sparse_index,
-            &mut self as *mut Self as *mut u8,
-            CompType::new::<C0>(),
-        )?;
+        let thing = table.insert(sparse_index, self)?;
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -492,11 +353,7 @@ where
     C0: Component,
 {
     fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        let thing = table.insert(
-            sparse_index,
-            &mut self.0 as *mut C0 as *mut u8,
-            CompType::new::<C0>(),
-        )?;
+        table.insert(sparse_index, self.0)?;
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -509,16 +366,8 @@ where
     C1: Component,
 {
     fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        let thing = table.insert(
-            sparse_index,
-            &mut self.0 as *mut C0 as *mut u8,
-            CompType::new::<C0>(),
-        )?;
-        let thing = table.insert(
-            sparse_index,
-            &mut self.1 as *mut C1 as *mut u8,
-            CompType::new::<C1>(),
-        )?;
+        table.insert(sparse_index, self.0)?;
+        table.insert(sparse_index, self.1)?;
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -535,21 +384,9 @@ where
     C2: Component,
 {
     fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        let thing = table.insert(
-            sparse_index,
-            &mut self.0 as *mut C0 as *mut u8,
-            CompType::new::<C0>(),
-        )?;
-        let thing = table.insert(
-            sparse_index,
-            &mut self.1 as *mut C1 as *mut u8,
-            CompType::new::<C1>(),
-        )?;
-        let thing = table.insert(
-            sparse_index,
-            &mut self.2 as *mut C2 as *mut u8,
-            CompType::new::<C2>(),
-        )?;
+        table.insert(sparse_index, self.0)?;
+        table.insert(sparse_index, self.1)?;
+        table.insert(sparse_index, self.2)?;
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -568,26 +405,10 @@ where
     C3: Component,
 {
     fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        let thing = table.insert(
-            sparse_index,
-            &mut self.0 as *mut C0 as *mut u8,
-            CompType::new::<C0>(),
-        )?;
-        let thing = table.insert(
-            sparse_index,
-            &mut self.1 as *mut C1 as *mut u8,
-            CompType::new::<C1>(),
-        )?;
-        let thing = table.insert(
-            sparse_index,
-            &mut self.2 as *mut C2 as *mut u8,
-            CompType::new::<C2>(),
-        )?;
-        let thing = table.insert(
-            sparse_index,
-            &mut self.3 as *mut C3 as *mut u8,
-            CompType::new::<C3>(),
-        )?;
+        table.insert(sparse_index, self.0)?;
+        table.insert(sparse_index, self.1)?;
+        table.insert(sparse_index, self.2)?;
+        table.insert(sparse_index, self.3)?;
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
