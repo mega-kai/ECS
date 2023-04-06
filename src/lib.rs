@@ -11,18 +11,14 @@
     core_intrinsics,
     const_trait_impl,
     const_type_id,
-    const_mut_refs
+    const_mut_refs,
+    const_type_name
 )]
 use std::alloc::{alloc, dealloc, realloc};
-use std::collections::hash_map;
-use std::collections::vec_deque::IntoIter;
 use std::hash::Hash;
-use std::marker::PhantomData;
-use std::mem::size_of;
-use std::num::NonZeroUsize;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Index, IndexMut, Not, Range, RangeBounds};
+use std::ops::{BitAnd, BitOr, BitXor, Not};
 use std::ptr::copy;
-use std::slice::{Iter, SliceIndex};
+use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{
     alloc::Layout,
     any::{type_name, TypeId},
@@ -30,30 +26,40 @@ use std::{
     fmt::Debug,
 };
 
-// TODO: check to properly drop all manually init memory
-
 //-----------------STORAGE-----------------//
-const GENERATION_COMPTYPE: CompType = CompType::new::<Generation>();
-const SPARSE_INDEX_COMPTYPE: CompType = CompType::new::<SparseIndex>();
+type SparseIndex = usize;
+type DenseIndex = usize;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+trait Component: 'static + Clone + Sized {}
+impl Component for () {}
+
+#[derive(PartialEq, Eq, Clone)]
+struct AccessCell {
+    ptr: *mut u8,
+    comp_type: CompType,
+    sparse_index: SparseIndex,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CompType {
+    name: &'static str,
     type_id: TypeId,
     layout: Layout,
 }
 impl CompType {
-    const fn new<C: 'static + Clone>() -> Self {
+    const fn new<C: 'static + Clone + Sized>() -> Self {
         Self {
+            name: type_name::<C>(),
             type_id: TypeId::of::<C>(),
             layout: Layout::new::<C>(),
         }
     }
 }
-
-#[derive(Clone)]
-struct Ptr {
-    ptr: *mut u8,
-    comp_type: CompType,
+impl Debug for CompType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let trimmed = self.name.split("::");
+        write!(f, "{}", trimmed.last().unwrap())
+    }
 }
 
 #[derive(Clone)]
@@ -70,11 +76,11 @@ impl Value {
         }
     }
 
-    unsafe fn cast<T: 'static + Clone>(self) -> Result<T, &'static str> {
+    fn cast<T: Component>(self) -> Result<T, &'static str> {
         if self.comp_type != CompType::new::<T>() {
             return Err("type not matching");
         } else {
-            Ok(self.ptr.cast::<T>().as_ref().unwrap().clone())
+            Ok(unsafe { self.ptr.cast::<T>().as_ref().unwrap().clone() })
         }
     }
 }
@@ -87,21 +93,6 @@ impl Drop for Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
-struct SparseIndex(usize);
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
-struct DenseIndex(usize);
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
-struct Generation(usize);
-impl Generation {
-    fn advance(&mut self) -> Self {
-        self.0 += 1;
-        *self
-    }
-}
-
 struct TypeErasedVec {
     ptr: *mut u8,
     len: usize,
@@ -110,7 +101,10 @@ struct TypeErasedVec {
 }
 
 impl TypeErasedVec {
-    fn new(comp_type: CompType, size: usize) -> Self {
+    fn new_empty(comp_type: CompType, size: usize) -> Self {
+        if comp_type.layout.size() == 0 {
+            panic!("zst")
+        }
         let ptr = unsafe { alloc(comp_type.layout.repeat(size).unwrap().0) };
         Self {
             ptr,
@@ -120,17 +114,63 @@ impl TypeErasedVec {
         }
     }
 
-    fn read(&mut self, index: usize) -> *mut u8 {
-        todo!()
+    unsafe fn read(&self, index: usize) -> *mut u8 {
+        if index >= self.len {
+            panic!("outta bound")
+        }
+        self.ptr.add(index * self.comp_type.layout.size())
     }
 
-    fn write(&mut self, index: usize, ptrs: *mut u8) {
-        // would automatically adjust length by recursively doubling its own length
-        todo!()
+    unsafe fn write(&mut self, index: usize, ptrs: *mut u8) {
+        if index >= self.len {
+            panic!("outta bound")
+        }
+        copy(ptrs, self.read(index), self.comp_type.layout.size())
     }
 
-    fn double_len(&mut self) {
-        todo!()
+    unsafe fn push(&mut self, ptrs: *mut u8) -> *mut u8 {
+        if self.len >= self.cap {
+            self.double_cap();
+        }
+        let ptr = self.read(self.len);
+        copy(ptrs, ptr, self.comp_type.layout.size());
+        self.len += 1;
+        ptr
+    }
+
+    unsafe fn ensure_cap(&mut self, cap: usize) {
+        if cap == 0 {
+            panic!("zero")
+        }
+        if cap > self.cap {
+            self.double_cap();
+            self.ensure_cap(cap);
+        }
+    }
+
+    unsafe fn double_cap(&mut self) {
+        self.ptr = realloc(
+            self.ptr,
+            self.comp_type.layout.repeat(self.len).unwrap().0,
+            self.cap * 2 * self.comp_type.layout.size(),
+        );
+        self.cap *= 2;
+    }
+
+    unsafe fn as_ref<C: 'static + Clone + Sized>(&self) -> &[C] {
+        if CompType::new::<C>() == self.comp_type {
+            from_raw_parts(self.ptr as *mut C, self.len)
+        } else {
+            panic!("type inconsistent")
+        }
+    }
+
+    unsafe fn as_mut<C: 'static + Clone + Sized>(&mut self) -> &mut [C] {
+        if CompType::new::<C>() == self.comp_type {
+            from_raw_parts_mut(self.ptr as *mut C, self.len)
+        } else {
+            panic!("type inconsistent")
+        }
     }
 }
 
@@ -148,62 +188,172 @@ struct DenseVec {
 }
 
 impl DenseVec {
-    fn new(comp_type: CompType, size: usize) -> Self {
+    fn new_empty(comp_type: CompType, size: usize) -> Self {
         let result = Self {
-            sparse_index_vec: TypeErasedVec::new(CompType::new::<SparseIndex>(), size),
-            comp_vec: TypeErasedVec::new(comp_type, size),
+            sparse_index_vec: TypeErasedVec::new_empty(CompType::new::<SparseIndex>(), size),
+            comp_vec: TypeErasedVec::new_empty(comp_type, size),
         };
-        todo!()
+        result
     }
 
-    fn read(&mut self, index: DenseIndex) -> (SparseIndex, *mut u8) {
-        todo!()
+    fn read(&self, index: DenseIndex) -> Result<(SparseIndex, *mut u8), &'static str> {
+        if index >= self.sparse_index_vec.len {
+            return Err("outta bound");
+        } else {
+            unsafe {
+                Ok((
+                    self.sparse_index_vec
+                        .read(index)
+                        .cast::<SparseIndex>()
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                    self.comp_vec.read(index),
+                ))
+            }
+        }
     }
 
-    fn write(&mut self, index: DenseIndex, content: (SparseIndex, *mut u8)) {
-        todo!()
+    fn write(
+        &mut self,
+        index: DenseIndex,
+        mut content: (SparseIndex, *mut u8),
+    ) -> Result<(), &'static str> {
+        if index >= self.sparse_index_vec.len {
+            return Err("outta bound");
+        } else {
+            unsafe {
+                self.sparse_index_vec
+                    .write(index, &mut content.0 as *mut SparseIndex as *mut u8);
+                self.comp_vec.write(index, content.1)
+            }
+            Ok(())
+        }
+    }
+
+    fn push(&mut self, mut content: (SparseIndex, *mut u8)) -> (DenseIndex, *mut u8) {
+        unsafe {
+            self.sparse_index_vec
+                .push(&mut content.0 as *mut SparseIndex as *mut u8);
+            let ptr = self.comp_vec.push(content.1);
+            (self.comp_vec.len - 1, ptr)
+        }
     }
 
     // with tail swap
-    fn remove(&mut self, index: DenseIndex) -> (SparseIndex, *mut u8) {
-        todo!()
+    fn remove<C: Component>(
+        &mut self,
+        dense_index: DenseIndex,
+    ) -> Result<(SparseIndex, C), &'static str> {
+        let thing = self.as_ref::<C>();
+        let result_thing = (thing.1[dense_index], thing.0[dense_index].clone());
+
+        let dense = self.sparse_index_vec.len - 1;
+        if dense_index < dense {
+            let another = self.read(dense)?;
+            self.write(dense_index, another)?;
+        }
+
+        self.sparse_index_vec.len -= 1;
+        self.comp_vec.len -= 1;
+
+        Ok(result_thing)
+    }
+
+    fn as_ref<C: 'static + Clone + Sized>(&self) -> (&[C], &[SparseIndex]) {
+        unsafe { (self.comp_vec.as_ref(), self.sparse_index_vec.as_ref()) }
+    }
+
+    fn as_mut<C: 'static + Clone + Sized>(&mut self) -> (&mut [C], &mut [SparseIndex]) {
+        unsafe { (self.comp_vec.as_mut(), self.sparse_index_vec.as_mut()) }
     }
 }
 
 struct SparseVec {
     dense_index_vec: TypeErasedVec,
-    generation_vec: TypeErasedVec,
 }
 
 impl SparseVec {
-    fn new() -> Self {
-        todo!()
+    fn new(size: usize) -> Self {
+        if size == 0 {
+            panic!("zero sized")
+        }
+        let mut thing = Self {
+            dense_index_vec: TypeErasedVec::new_empty(CompType::new::<Option<DenseIndex>>(), size),
+        };
+        thing.populate_with_default();
+        thing
     }
 
-    fn read(&self, sparse_index: SparseIndex) -> Result<DenseIndex, &'static str> {
-        todo!()
+    fn toggle_on(
+        &mut self,
+        sparse_index: SparseIndex,
+        dense_index_to_write: DenseIndex,
+    ) -> Result<(), &'static str> {
+        self.ensure_cap_by_doubling(sparse_index);
+        if let None = self.as_mut()[sparse_index] {
+            self.as_mut()[sparse_index] = Some(dense_index_to_write);
+            Ok(())
+        } else {
+            Err("sparse already taken")
+        }
     }
 
-    // the three functions would panic if sparse index is invalid
-    fn toggle_on(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
-        todo!()
+    fn toggle_change(
+        &mut self,
+        sparse_index: SparseIndex,
+        dense_index_to_write: DenseIndex,
+    ) -> Result<(), &'static str> {
+        self.ensure_cap_by_doubling(sparse_index);
+        if let Some(_) = self.as_mut()[sparse_index] {
+            self.as_mut()[sparse_index] = Some(dense_index_to_write);
+            Ok(())
+        } else {
+            Err("sparse not yet taken")
+        }
     }
 
-    fn toggle_change(&mut self, sparse_index: SparseIndex, dense_index_to_write: DenseIndex) {
-        todo!()
+    fn toggle_off(&mut self, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        self.ensure_cap_by_doubling(sparse_index);
+        if let Some(_) = self.as_mut()[sparse_index] {
+            self.as_mut()[sparse_index] = None;
+            Ok(())
+        } else {
+            Err("sparse not yet taken")
+        }
     }
 
-    fn toggle_off(&mut self, sparse_index: SparseIndex) {
-        todo!()
+    fn ensure_cap_by_doubling(&mut self, cap: usize) {
+        if cap == 0 {
+            panic!("zero")
+        }
+        if cap >= self.dense_index_vec.cap {
+            unsafe {
+                self.dense_index_vec.ensure_cap(cap);
+            }
+            self.populate_with_default();
+        }
     }
-}
 
-#[derive(PartialEq, Eq)]
-struct AccessCell {
-    ptr: *mut u8,
-    comp_type: CompType,
-    sparse_index: SparseIndex,
-    generation: Generation,
+    fn populate_with_default(&mut self) {
+        if self.dense_index_vec.len < self.dense_index_vec.cap {
+            for num in self.dense_index_vec.len..self.dense_index_vec.cap {
+                unsafe {
+                    self.dense_index_vec.len += 1;
+                    self.dense_index_vec
+                        .write(num, &mut None as *mut Option<DenseIndex> as *mut u8);
+                }
+            }
+        }
+    }
+
+    fn as_ref(&self) -> &[Option<DenseIndex>] {
+        unsafe { self.dense_index_vec.as_ref() }
+    }
+
+    fn as_mut(&mut self) -> &mut [Option<DenseIndex>] {
+        unsafe { self.dense_index_vec.as_mut() }
+    }
 }
 
 struct SparseSet {
@@ -214,27 +364,39 @@ struct SparseSet {
 
 impl SparseSet {
     fn new(comp_type: CompType, size: usize) -> Self {
-        todo!()
+        Self {
+            comp_type,
+            dense_vec: DenseVec::new_empty(comp_type, size),
+            sparse_vec: SparseVec::new(size),
+        }
     }
 
-    fn is_taken(&self, sparse_index: SparseIndex) -> bool {
-        todo!()
+    fn insert(
+        &mut self,
+        sparse_index: SparseIndex,
+        ptr: *mut u8,
+    ) -> Result<AccessCell, &'static str> {
+        if let Some(_) = self.sparse_vec.as_ref()[sparse_index] {
+            Err("sparse already taken")
+        } else {
+            let (dense_index, result_ptr) = self.dense_vec.push((sparse_index, ptr));
+            self.sparse_vec.toggle_on(sparse_index, dense_index)?;
+            Ok(AccessCell {
+                ptr: result_ptr,
+                comp_type: self.comp_type,
+                sparse_index,
+            })
+        }
     }
 
-    fn read(&self, sparse_index: SparseIndex) -> Result<AccessCell, &'static str> {
-        todo!()
-    }
-
-    fn write(&mut self, sparse_index: SparseIndex, ptr: Ptr) -> Result<AccessCell, &'static str> {
-        todo!()
-    }
-
-    fn remove(&mut self, sparse_index: SparseIndex) -> Result<Value, &'static str> {
-        todo!()
-    }
-
-    fn read_all(&self) -> Result<Vec<AccessCell>, &'static str> {
-        todo!()
+    fn remove<C: Component>(&mut self, sparse_index: SparseIndex) -> Result<C, &'static str> {
+        if let Some(dense_index) = self.sparse_vec.as_ref()[sparse_index] {
+            self.sparse_vec.toggle_off(sparse_index)?;
+            Ok(self.dense_vec.remove(dense_index)?.1)
+            // TODO handle the tail swap
+        } else {
+            Err("invalid sparse")
+        }
     }
 }
 
@@ -243,22 +405,19 @@ struct Table {
     bottom_sparse_index: SparseIndex,
 }
 
-// TODO: variadic component insertion, probably with tuple
 impl Table {
     fn new() -> Self {
         Self {
             table: HashMap::new(),
-            bottom_sparse_index: SparseIndex(0),
+            bottom_sparse_index: 0,
         }
     }
 
     //-----------------COLUMN MANIPULATION-----------------//
-    fn new_column(&mut self, comp_type: CompType) -> &mut SparseSet {
-        if self.try_column(comp_type).is_ok() {
-            panic!("type cannot be init twice")
-        }
-        self.table.insert(comp_type, SparseSet::new(comp_type, 64));
-        self.table.get_mut(&comp_type).unwrap()
+    fn ensure_column(&mut self, comp_type: CompType) -> &mut SparseSet {
+        self.table
+            .entry(comp_type)
+            .or_insert(SparseSet::new(comp_type, 64))
     }
 
     fn remove_column(&mut self, comp_type: CompType) -> Option<SparseSet> {
@@ -273,222 +432,387 @@ impl Table {
         }
     }
 
-    fn ensure_column(&mut self, comp_type: CompType) -> &mut SparseSet {
-        self.table
-            .entry(comp_type)
-            .or_insert(SparseSet::new(comp_type, 64))
-    }
-
     //-----------------ROW MANIPULATION-----------------//
     fn new_row(&mut self) -> SparseIndex {
         let result = self.bottom_sparse_index;
-        // todo cache
-        self.bottom_sparse_index.0 += 1;
+        self.bottom_sparse_index += 1;
         result
     }
 
-    fn remove_row(&mut self, sparse_index: SparseIndex) -> Result<(), &'static str> {
-        todo!()
-    }
+    // for rn it only extends the row, will not deallocate any row
 
     //-----------------BASIC OPERATIONS-----------------//
-    fn write(&mut self, sparse_index: SparseIndex, ptr: Ptr) -> Result<AccessCell, &'static str> {
-        self.cache_add(sparse_index, ptr.comp_type);
-        todo!()
+    fn insert(
+        &mut self,
+        sparse_index: SparseIndex,
+        ptr: *mut u8,
+        comp_type: CompType,
+    ) -> Result<AccessCell, &'static str> {
+        self.try_column(comp_type)?.insert(sparse_index, ptr)
     }
 
-    fn remove(&mut self, access: AccessCell) -> Result<Value, &'static str> {
-        self.cache_remove(access.sparse_index, access.comp_type);
-        todo!()
-    }
-
-    fn read(&mut self, sparse_index: SparseIndex) -> Result<AccessCell, &'static str> {
-        todo!()
-    }
-
-    //-----------------CACHE-----------------//
-    fn cache_add(&mut self, sparse_index: SparseIndex, comp_type: CompType) {
-        // panics if the type is already added
-    }
-
-    fn cache_remove(&mut self, sparse_index: SparseIndex, comp_type: CompType) {
-        // panics if the type is not in this sparse index
-    }
-
-    fn cache_if_contains(&mut self, sparse_index: SparseIndex, comp_type: CompType) -> bool {
-        todo!()
+    fn remove<C: Component>(&mut self, sparse_index: SparseIndex) -> Result<C, &'static str> {
+        self.try_column(CompType::new::<C>())?.remove(sparse_index)
     }
 
     //-----------------COLUMN YIELD-----------------//
-    fn get_column(&mut self, comp_type: CompType) -> Vec<AccessCell> {
-        todo!("yield empty if column type is invalid")
+    fn as_ref<C: Component>(&mut self) -> Result<(&[C], &[SparseIndex]), &'static str> {
+        Ok(self.try_column(CompType::new::<C>())?.dense_vec.as_ref())
+    }
+
+    fn as_mut<C: Component>(&mut self) -> Result<(&mut [C], &mut [SparseIndex]), &'static str> {
+        Ok(self.try_column(CompType::new::<C>())?.dense_vec.as_mut())
     }
 }
 
-struct Command {
-    table: *mut Table,
+trait ComponentBundle: Sized {
+    fn insert(self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str>;
+    fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str>;
 }
 
-impl Command {
-    fn new(table: &mut Table) -> Self {
-        Self { table }
+impl<C0> ComponentBundle for C0
+where
+    C0: Component,
+{
+    fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        let thing = table.insert(
+            sparse_index,
+            &mut self as *mut Self as *mut u8,
+            CompType::new::<C0>(),
+        )?;
+        Ok(())
+    }
+    fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
+        table.remove::<C0>(sparse_index)
+    }
+}
+
+impl<C0> ComponentBundle for (C0,)
+where
+    C0: Component,
+{
+    fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        let thing = table.insert(
+            sparse_index,
+            &mut self.0 as *mut C0 as *mut u8,
+            CompType::new::<C0>(),
+        )?;
+        Ok(())
+    }
+    fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
+        Ok((table.remove::<C0>(sparse_index)?,))
+    }
+}
+impl<C0, C1> ComponentBundle for (C0, C1)
+where
+    C0: Component,
+    C1: Component,
+{
+    fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        let thing = table.insert(
+            sparse_index,
+            &mut self.0 as *mut C0 as *mut u8,
+            CompType::new::<C0>(),
+        )?;
+        let thing = table.insert(
+            sparse_index,
+            &mut self.1 as *mut C1 as *mut u8,
+            CompType::new::<C1>(),
+        )?;
+        Ok(())
+    }
+    fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
+        Ok((
+            table.remove::<C0>(sparse_index)?,
+            table.remove::<C1>(sparse_index)?,
+        ))
+    }
+}
+impl<C0, C1, C2> ComponentBundle for (C0, C1, C2)
+where
+    C0: Component,
+    C1: Component,
+    C2: Component,
+{
+    fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        let thing = table.insert(
+            sparse_index,
+            &mut self.0 as *mut C0 as *mut u8,
+            CompType::new::<C0>(),
+        )?;
+        let thing = table.insert(
+            sparse_index,
+            &mut self.1 as *mut C1 as *mut u8,
+            CompType::new::<C1>(),
+        )?;
+        let thing = table.insert(
+            sparse_index,
+            &mut self.2 as *mut C2 as *mut u8,
+            CompType::new::<C2>(),
+        )?;
+        Ok(())
+    }
+    fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
+        Ok((
+            table.remove::<C0>(sparse_index)?,
+            table.remove::<C1>(sparse_index)?,
+            table.remove::<C2>(sparse_index)?,
+        ))
+    }
+}
+impl<C0, C1, C2, C3> ComponentBundle for (C0, C1, C2, C3)
+where
+    C0: Component,
+    C1: Component,
+    C2: Component,
+    C3: Component,
+{
+    fn insert(mut self, table: &mut Table, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        let thing = table.insert(
+            sparse_index,
+            &mut self.0 as *mut C0 as *mut u8,
+            CompType::new::<C0>(),
+        )?;
+        let thing = table.insert(
+            sparse_index,
+            &mut self.1 as *mut C1 as *mut u8,
+            CompType::new::<C1>(),
+        )?;
+        let thing = table.insert(
+            sparse_index,
+            &mut self.2 as *mut C2 as *mut u8,
+            CompType::new::<C2>(),
+        )?;
+        let thing = table.insert(
+            sparse_index,
+            &mut self.3 as *mut C3 as *mut u8,
+            CompType::new::<C3>(),
+        )?;
+        Ok(())
+    }
+    fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
+        Ok((
+            table.remove::<C0>(sparse_index)?,
+            table.remove::<C1>(sparse_index)?,
+            table.remove::<C2>(sparse_index)?,
+            table.remove::<C3>(sparse_index)?,
+        ))
+    }
+}
+
+struct Command<'a> {
+    table: &'a mut Table,
+    system: &'a mut System,
+}
+impl<'a> Command<'a> {
+    fn new(table: &'a mut Table, system: &'a mut System) -> Self {
+        Self { table, system }
     }
 
-    // variadic components
-    fn new_row<C: 'static + Clone>(&mut self, comps: C) -> SparseIndex {
+    fn new_row<C: ComponentBundle>(&mut self, comps: C) {
+        let sparse = self.table.new_row();
+        comps.insert(self.table, sparse).unwrap();
+    }
+
+    fn write<C: ComponentBundle>(&mut self, comps: C, sparse_index: SparseIndex) {
+        comps.insert(self.table, sparse_index).unwrap();
+    }
+
+    fn remove<C: ComponentBundle>(&mut self, sparse_index: SparseIndex) -> Result<C, &'static str> {
+        C::remove(self.table, sparse_index)
+    }
+
+    // this does not support bundle searching yet
+    fn query<C: Component>(&mut self, filter: ExpressionTree) -> Vec<&mut C> {
+        // use system to cache actually
+        let sparse = filter.filter::<C>(self.table);
         todo!()
     }
 
-    // if you wanna append more components to a certain row, you must do it while iterating over the
+    // fn query_sparse<C: Component>(&mut self, filter: ExpressionTree) -> Ve {
+    //     todo!()
+    // }
+}
 
-    fn query<C>(&mut self, ops: LinkedOps) -> QueryResult<C>
-    where
-        C: CompRef,
-    {
-        // how do i redesign the comptype so that i holds all the filter information; or retain the discreet filter types plus their logical
-        // relations so i can query single comp vec and apply vec logic ops again
-        todo!()
+#[derive(Clone)]
+enum ExpressionTree {
+    Single(CompType, bool),
+    Compound {
+        complement_flag: bool,
+        head: Box<ExpressionTree>,
+        op: Operation,
+        tail: Box<ExpressionTree>,
+    },
+}
+impl ExpressionTree {
+    const fn new<T: Component>() -> Self {
+        // this is only for comp type
+        Self::Single(CompType::new::<T>(), false)
     }
-}
 
-struct QueryResult<C: CompRef> {
-    phantom: PhantomData<C>,
-    accesses: Vec<AccessCell>,
-}
-impl<C: CompRef> IntoIterator for QueryResult<C> {
-    type Item = C;
-
-    type IntoIter = IntoIter<C>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        todo!()
-    }
-}
-
-#[derive(Debug)]
-struct LinkedOps {
-    comp_type: WithOrWithout,
-    cache: Ops,
-}
-impl LinkedOps {
-    const fn new<T: 'static + Clone>() -> Self {
-        Self {
-            comp_type: WithOrWithout::With(CompType::new::<T>()),
-            cache: Ops::new(),
+    fn toggle_flag(&mut self) {
+        match self {
+            ExpressionTree::Single(_, val) => *val = !*val,
+            ExpressionTree::Compound {
+                complement_flag: val,
+                ..
+            } => *val = !*val,
         }
     }
+
+    fn recursively_fmt(&self) -> String {
+        let mut result = String::new();
+        match self {
+            Self::Single(arg0, arg1) => {
+                if *arg1 {
+                    result.push_str(&format!("!{:?}", arg0));
+                    result
+                } else {
+                    result.push_str(&format!("{:?}", arg0));
+                    result
+                }
+            }
+            Self::Compound {
+                complement_flag,
+                head,
+                op,
+                tail,
+            } => {
+                if *complement_flag {
+                    result.push('!');
+                }
+                result.push('(');
+                result.push_str(&head.recursively_fmt());
+                result.push(' ');
+                result.push_str(&format!("{:?}", op));
+                result.push(' ');
+                result.push_str(&tail.recursively_fmt());
+                result.push(')');
+                result
+            }
+        }
+    }
+
+    fn filter<C: Component>(mut self, table: &mut Table) -> Vec<SparseIndex> {
+        // need to manually get rid of the complement flags
+
+        todo!()
+    }
+}
+impl Debug for ExpressionTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.recursively_fmt())
+    }
 }
 
-#[derive(Debug, Clone)]
-enum WithOrWithout {
-    With(CompType),
-    // not op should always have highest precedence, and each after that should have a lower one
-    Without(CompType),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Operation {
-    // precedence
-    And(WithOrWithout),
-    Xor(WithOrWithout),
-    Or(WithOrWithout),
+    And,
+    Xor,
+    Or,
+}
+impl Debug for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::And => write!(f, "&"),
+            Self::Xor => write!(f, "^"),
+            Self::Or => write!(f, "|"),
+        }
+    }
 }
 impl Operation {
-    fn get_type(&self) -> CompType {
+    fn apply(&self, vec1: &[AccessCell], vec2: &[AccessCell]) -> Vec<AccessCell> {
+        // match self {
+        //     Operation::And => {
+        //         let mut result = intersection(vec1, vec2);
+        //         result
+        //     }
+        //     Operation::Xor => {
+        //         let mut result = union_minus_intersection(vec1, vec2);
+        //         result
+        //     }
+        //     Operation::Or => {
+        //         let mut result = union(vec1, vec2);
+        //         result
+        //     }
+        // }
         todo!()
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Ops(Vec<Operation>);
-impl Ops {
-    const fn new() -> Self {
-        Self(vec![])
-    }
-}
-
-fn is_linked_ops_single(ops: &LinkedOps) -> bool {
-    todo!()
-}
-
-// gist of things: negation first; then applying left to right
-impl BitAnd for LinkedOps {
-    type Output = Self;
-
-    fn bitand(mut self, mut rhs: Self) -> Self::Output {
-        // self will always be single
-        if is_linked_ops_single(&rhs) {
-            self.cache.0.push(Operation::And(rhs.comp_type));
-            return self;
-        } else {
-            rhs.cache.0.push(Operation::And(self.comp_type));
-            return rhs;
-        }
-    }
-}
-impl BitOr for LinkedOps {
-    type Output = Self;
-
-    fn bitor(mut self, mut rhs: Self) -> Self::Output {
-        todo!()
-    }
-}
-impl BitXor for LinkedOps {
-    type Output = Self;
-
-    fn bitxor(mut self, mut rhs: Self) -> Self::Output {
-        todo!()
-    }
-}
-
-impl Not for LinkedOps {
-    type Output = Self;
-
-    fn not(mut self) -> Self::Output {
-        Self {
-            comp_type: match self.comp_type {
-                WithOrWithout::With(val) => WithOrWithout::Without(val),
-                WithOrWithout::Without(_) => {
-                    panic!("this shouldn't happen, as negation operator is always applied first")
-                }
-            },
-            cache: self.cache,
-        }
     }
 }
 
 //-----------------QUERY BASICS-----------------//
 
+// assuming that all slices of refs are the sparse of a single component; these slices are not sorted tho
+
 // A & B; AND
-fn intersection(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
+fn intersection(vec1: &mut [SparseIndex], vec2: &mut [SparseIndex]) -> Vec<SparseIndex> {
+    // the complement flag is acually taken into consideration from here
     todo!("remember iterate with self with the sparse index, make sure the row index matches before comparing")
 }
 
 // A | B; OR
-fn union(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
-    todo!()
-}
-
-// !A; NOT
-fn complement(vec1: Vec<AccessCell>) -> Vec<AccessCell> {
+fn union(vec1: &[SparseIndex], vec2: &[SparseIndex]) -> Vec<SparseIndex> {
     todo!()
 }
 
 // (A | B) & (!A | !B); XOR
-fn union_minus_intersection(vec1: Vec<AccessCell>, vec2: Vec<AccessCell>) -> Vec<AccessCell> {
+fn union_minus_intersection(vec1: &[SparseIndex], vec2: &[SparseIndex]) -> Vec<SparseIndex> {
     todo!()
 }
 
-trait CompRef {}
-impl<C> CompRef for &C where C: 'static + Clone {}
-impl<C> CompRef for &mut C where C: 'static + Clone {}
+// !A; NOT
+fn complement(vec1: &[SparseIndex], vec2: &[SparseIndex]) -> Vec<SparseIndex> {
+    todo!()
+}
+
+// gist of things: negation first; then applying left to right
+impl BitAnd for ExpressionTree {
+    type Output = Self;
+    fn bitand(mut self, mut rhs: Self) -> Self::Output {
+        ExpressionTree::Compound {
+            head: Box::new(self),
+            op: Operation::And,
+            tail: Box::new(rhs),
+            complement_flag: false,
+        }
+    }
+}
+impl BitOr for ExpressionTree {
+    type Output = Self;
+    fn bitor(mut self, mut rhs: Self) -> Self::Output {
+        ExpressionTree::Compound {
+            head: Box::new(self),
+            op: Operation::Or,
+            tail: Box::new(rhs),
+            complement_flag: false,
+        }
+    }
+}
+impl BitXor for ExpressionTree {
+    type Output = Self;
+    fn bitxor(mut self, mut rhs: Self) -> Self::Output {
+        ExpressionTree::Compound {
+            head: Box::new(self),
+            op: Operation::Xor,
+            tail: Box::new(rhs),
+            complement_flag: false,
+        }
+    }
+}
+
+impl Not for ExpressionTree {
+    type Output = Self;
+    fn not(mut self) -> Self::Output {
+        self.toggle_flag();
+        self
+    }
+}
 
 //-----------------SCHEDULER-----------------//
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[non_exhaustive]
 enum ExecutionFrequency {
     Always,
-    Once(bool),
+    Once,
     // Timed(f64, f64),
 }
 
@@ -496,6 +820,8 @@ struct System {
     order: usize,
     frequency: ExecutionFrequency,
     func: fn(Command),
+    run_times: usize,
+    // cache: Vec<>,
 }
 impl System {
     fn default(func: fn(Command)) -> Self {
@@ -503,6 +829,7 @@ impl System {
             order: 0,
             frequency: ExecutionFrequency::Always,
             func,
+            run_times: 0,
         }
     }
 
@@ -511,19 +838,12 @@ impl System {
             order,
             frequency,
             func,
+            run_times: 0,
         }
     }
 
-    fn run(&self, table: &mut Table) {
-        (self.func)(Command::new(table))
-    }
-
-    fn is_once_run(&self) -> bool {
-        match self.frequency {
-            ExecutionFrequency::Always => false,
-            ExecutionFrequency::Once(run_status) => run_status,
-            // _ => non exhaustive,
-        }
+    fn run(&mut self, table: &mut Table) {
+        (self.func)(Command::new(table, self))
     }
 }
 
@@ -546,14 +866,12 @@ impl Ord for System {
 
 struct Scheduler {
     new_pool: Vec<System>,
-    // waiting: Vec<System>,
     queue: Vec<System>,
 }
 impl Scheduler {
     fn new() -> Self {
         Self {
             new_pool: vec![],
-            // waiting: vec![],
             queue: vec![],
         }
     }
@@ -563,7 +881,16 @@ impl Scheduler {
     }
 
     fn prepare_queue(&mut self) {
-        self.queue.retain(|x| !x.is_once_run());
+        self.queue.retain(|x| match x.frequency {
+            ExecutionFrequency::Always => return true,
+            ExecutionFrequency::Once => {
+                if x.run_times > 0 {
+                    return false;
+                } else {
+                    return true;
+                }
+            }
+        });
         if !self.new_pool.is_empty() {
             self.queue.append(&mut self.new_pool);
             self.new_pool.clear();
@@ -589,13 +916,15 @@ impl ECS {
         match once {
             true => self.scheduler.add_system(System {
                 order,
-                frequency: ExecutionFrequency::Once(false),
+                frequency: ExecutionFrequency::Once,
                 func,
+                run_times: 0,
             }),
             false => self.scheduler.add_system(System {
                 order,
                 frequency: ExecutionFrequency::Always,
                 func,
+                run_times: 0,
             }),
         }
     }
@@ -603,43 +932,83 @@ impl ECS {
     fn tick(&mut self) {
         self.scheduler.prepare_queue();
         for system in &mut self.scheduler.queue {
-            match system.frequency {
-                ExecutionFrequency::Always => system.run(&mut self.table),
-                ExecutionFrequency::Once(_) => {
-                    system.frequency = ExecutionFrequency::Once(true);
-                    system.run(&mut self.table);
-                }
-            }
+            system.run(&mut self.table);
+            system.run_times += 1;
         }
     }
 }
 
 #[cfg(test)]
 mod test {
+
     use super::*;
 
     #[derive(Clone)]
     struct Health(i32);
-    const HEALTH: LinkedOps = LinkedOps::new::<Health>();
+    impl Component for Health {}
+    const HEALTH: ExpressionTree = ExpressionTree::new::<Health>();
 
     #[derive(Clone, Debug)]
     struct Mana(i32);
-    const MANA: LinkedOps = LinkedOps::new::<Mana>();
+    impl Component for Mana {}
+    const MANA: ExpressionTree = ExpressionTree::new::<Mana>();
 
     #[derive(Clone, Debug)]
     struct Player(&'static str);
-    const PLAYER: LinkedOps = LinkedOps::new::<Player>();
+    impl Component for Player {}
+    const PLAYER: ExpressionTree = ExpressionTree::new::<Player>();
 
     #[derive(Clone, Debug)]
     struct Enemy(&'static str);
-    const ENEMY: LinkedOps = LinkedOps::new::<Enemy>();
+    impl Component for Enemy {}
+    const ENEMY: ExpressionTree = ExpressionTree::new::<Enemy>();
 
-    const NULL: LinkedOps = LinkedOps::new::<()>();
+    const NULL: ExpressionTree = ExpressionTree::new::<()>();
 
     fn test(mut com: Command) {
-        let query_one = com.query::<&Health>(NULL);
-        for val in query_one {}
-        let query_two = com.query::<&mut Player>(PLAYER ^ !ENEMY & (HEALTH | MANA));
-        for val in query_two {}
+        for ent in com.query::<Player>(!ENEMY) {
+            println!("{}", ent.0)
+        }
+    }
+
+    #[derive(Clone)]
+    struct AObj(i32);
+    impl Component for AObj {}
+    const A: ExpressionTree = ExpressionTree::new::<AObj>();
+
+    #[derive(Clone, Debug)]
+    struct BObj(i32);
+    impl Component for BObj {}
+    const B: ExpressionTree = ExpressionTree::new::<BObj>();
+
+    #[derive(Clone, Debug)]
+    struct CObj(&'static str);
+    impl Component for CObj {}
+    const C: ExpressionTree = ExpressionTree::new::<CObj>();
+
+    #[derive(Clone, Debug)]
+    struct DObj(&'static str);
+    impl Component for DObj {}
+    const D: ExpressionTree = ExpressionTree::new::<DObj>();
+
+    #[derive(Clone, Debug)]
+    struct EObj(&'static str);
+    impl Component for EObj {}
+    const E: ExpressionTree = ExpressionTree::new::<EObj>();
+
+    #[derive(Clone, Debug)]
+    struct FObj(&'static str);
+    impl Component for FObj {}
+    const F: ExpressionTree = ExpressionTree::new::<FObj>();
+
+    #[derive(Clone, Debug)]
+    struct GObj(&'static str);
+    impl Component for GObj {}
+    const G: ExpressionTree = ExpressionTree::new::<GObj>();
+
+    #[test]
+    fn test_linked_ops() {
+        let value = A | !(B ^ !C) & (!D ^ !(E | !F));
+        println!("{:?}", value);
     }
 }
