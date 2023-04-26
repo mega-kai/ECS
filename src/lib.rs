@@ -1,4 +1,10 @@
-#![allow(dead_code, unused_variables, unreachable_code, unused_mut)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unreachable_code,
+    unused_mut,
+    unused_assignments
+)]
 #![feature(
     alloc_layout_extra,
     map_try_insert,
@@ -18,15 +24,13 @@ use std::hash::Hash;
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 use std::simd::Simd;
 use std::slice::from_raw_parts_mut;
-use std::{
-    alloc::Layout,
-    any::{type_name, TypeId},
-    fmt::Debug,
-};
+use std::{alloc::Layout, fmt::Debug};
 
 //-----------------STORAGE-----------------//
 type SparseIndex = usize;
 type DenseIndex = usize;
+type TypeId = u64;
+
 const NULL: Filter = Filter::from::<()>();
 
 #[cfg(target_pointer_width = "64")]
@@ -34,7 +38,7 @@ const MASK: Simd<usize, 64> = Simd::from_array([9223372036854775808; 64]);
 #[cfg(target_pointer_width = "32")]
 const MASK: Simd<usize, 64> = Simd::from_array([2147483648; 64]);
 
-trait Tuple: Sized {
+trait Tuple: Sized + 'static {
     fn insert(
         self,
         table: &mut Table,
@@ -132,47 +136,27 @@ where
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct CompType {
-    type_id: TypeId,
-    layout: Layout,
-}
-impl CompType {
-    const fn new<C: 'static + Clone + Sized>() -> Self {
-        Self {
-            type_id: TypeId::of::<C>(),
-            layout: Layout::new::<C>(),
-        }
-    }
-}
-impl Debug for CompType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let trimmed = type_name::<Self>().split("::");
-        write!(f, "{}", trimmed.last().unwrap())
-    }
-}
-
 struct TypeErasedVec {
     ptr: *mut u8,
     len: usize,
     cap: usize,
-    comp_type: CompType,
+    layout: Layout,
 }
 impl TypeErasedVec {
     fn new_empty<C: 'static + Clone + Sized>(cap: usize) -> Self {
         assert!(cap != 0, "zero capacity is not allowed");
-        let comp_type = CompType::new::<C>();
-        assert!(comp_type.layout.size() != 0, "zst");
-        let ptr = unsafe { alloc(comp_type.layout.repeat(cap).unwrap().0) };
+        let layout = Layout::new::<C>();
+        assert!(layout.size() != 0, "zst");
+        let ptr = unsafe { alloc(layout.repeat(cap).unwrap().0) };
         Self {
             ptr,
             len: 0,
             cap,
-            comp_type,
+            layout,
         }
     }
 
-    fn push<C: 'static + Clone + Sized>(&mut self, grow_len: usize, value: C) {
+    fn push_many<C: 'static + Clone + Sized>(&mut self, grow_len: usize, value: C) {
         self.ensure_cap(grow_len + self.len);
         let old_len = self.len;
         self.len += grow_len;
@@ -184,8 +168,8 @@ impl TypeErasedVec {
             self.ptr = unsafe {
                 realloc(
                     self.ptr,
-                    self.comp_type.layout.repeat(self.len).unwrap().0,
-                    self.cap * 2 * self.comp_type.layout.size(),
+                    self.layout.repeat(self.len).unwrap().0,
+                    self.cap * 2 * self.layout.size(),
                 )
             };
             self.cap *= 2;
@@ -200,7 +184,7 @@ impl TypeErasedVec {
 impl Drop for TypeErasedVec {
     fn drop(&mut self) {
         unsafe {
-            dealloc(self.ptr, self.comp_type.layout.repeat(self.cap).unwrap().0);
+            dealloc(self.ptr, self.layout.repeat(self.cap).unwrap().0);
         }
     }
 }
@@ -220,8 +204,8 @@ impl DenseVec {
     }
 
     fn push<C: 'static + Clone + Sized>(&mut self, content: (SparseIndex, C)) -> DenseIndex {
-        self.comp_vec.push(1, content.1);
-        self.sparse_index_vec.push(1, content.0);
+        self.comp_vec.push_many(1, content.1);
+        self.sparse_index_vec.push_many(1, content.0);
         self.comp_vec.len - 1
     }
 
@@ -252,45 +236,20 @@ impl DenseVec {
     }
 }
 
-struct SparseVec {
-    dense_index_vec: TypeErasedVec,
-}
-
-impl SparseVec {
-    fn new() -> Self {
-        let mut thing = Self {
-            dense_index_vec: TypeErasedVec::new_empty::<DenseIndex>(64),
-        };
-        thing.dense_index_vec.push::<DenseIndex>(64, 0);
-        thing
-    }
-
-    // note that if it's not empty it will have an on bit at the start
-    fn as_slice(&self) -> &mut [DenseIndex] {
-        self.dense_index_vec.as_slice()
-    }
-
-    fn as_simd(&self) -> &mut [Simd<DenseIndex, 64>] {
-        unsafe {
-            from_raw_parts_mut(
-                self.dense_index_vec.ptr as *mut Simd<DenseIndex, 64>,
-                self.dense_index_vec.len / 64,
-            )
-        }
-    }
-}
-
+// TODO make this indexable with sparse index -> Option<actual value>
 struct SparseSet {
+    sparse_vec: TypeErasedVec,
     dense_vec: DenseVec,
-    sparse_vec: SparseVec,
 }
 
 impl SparseSet {
     fn new<C: 'static + Clone + Sized>() -> Self {
-        Self {
+        let mut thing = Self {
+            sparse_vec: TypeErasedVec::new_empty::<DenseIndex>(64),
             dense_vec: DenseVec::new_empty::<C>(),
-            sparse_vec: SparseVec::new(),
-        }
+        };
+        thing.sparse_vec.push_many::<DenseIndex>(64, 0);
+        thing
     }
 
     fn insert<C: 'static + Clone + Sized>(
@@ -298,52 +257,50 @@ impl SparseSet {
         sparse_index: SparseIndex,
         value: C,
     ) -> Result<(), &'static str> {
-        if self.sparse_vec.as_slice()[sparse_index] == 0 {
+        if self.as_slice()[sparse_index] == 0 {
             let dense = self.dense_vec.push((sparse_index, value));
-            self.sparse_vec.as_slice()[sparse_index] = dense;
+            self.as_slice()[sparse_index] = dense;
             Ok(())
         } else {
             Err("sparse taken")
         }
     }
 
-    // todo handle tail swap
+    // handle tail swap
     fn remove<C: 'static + Clone + Sized>(
         &mut self,
         sparse_index: SparseIndex,
     ) -> Result<C, &'static str> {
-        let dense_index = self.sparse_vec.as_slice()[sparse_index];
+        let dense_index = self.as_slice()[sparse_index];
         if dense_index != 0 {
-            self.sparse_vec.as_slice()[sparse_index] = 0;
+            self.as_slice()[sparse_index] = 0;
             let val = self.dense_vec.remove::<C>(dense_index)?.1;
-            self.sparse_vec.as_slice()[self.dense_vec.as_slice()[dense_index]] = dense_index;
+            self.as_slice()[self.dense_vec.as_slice()[dense_index]] = dense_index;
             Ok(val)
         } else {
             Err("sparse empty")
         }
     }
-}
 
-// each table slice correspond to one filter; plus there's no such thing is aggressive caching, since ^ and | exists within the filter
-struct SubTable {
-    // local index -> ptr to actual data
-    content: HashMap<CompType, TypeErasedVec>,
-}
-impl SubTable {
-    fn new() -> Self {
-        Self {
-            content: HashMap::new(),
-        };
-        let vec = TypeErasedVec::new_empty::<Option<*mut u8>>(64);
-        // populate the slice
-        todo!()
+    fn as_slice(&self) -> &mut [DenseIndex] {
+        self.sparse_vec.as_slice()
+    }
+
+    // first bit is a boolean flag indicates wheather or not this slot is taken, then the rest bits are actual dense index
+    fn as_simd(&self) -> &mut [Simd<DenseIndex, 64>] {
+        unsafe {
+            from_raw_parts_mut(
+                self.sparse_vec.ptr as *mut Simd<DenseIndex, 64>,
+                self.sparse_vec.len / 64,
+            )
+        }
     }
 }
 
 struct Table {
-    global_table: HashMap<CompType, SparseSet>,
+    table: HashMap<TypeId, SparseSet>,
     bottom_sparse_index: SparseIndex,
-    sub_tables: HashMap<Filter, SubTable>,
+    cache_table: HashMap<Filter, QueryCache>,
 }
 
 impl Table {
@@ -362,42 +319,72 @@ impl Table {
             self.bottom_sparse_index += 1;
             self.bottom_sparse_index - 1
         };
-        self.global_table
-            .entry(CompType::new::<C>())
+        self.table
+            .entry(std::intrinsics::type_id::<C>())
             .or_insert(SparseSet::new::<C>())
             .insert(sparse, value)
-        // todo, update cache
+        // todo, update cache; when a component is added to this row, how should we determine whether of not this row belongs
+        // in certain filter group;
+        // generate a filter type from the newly added row, iterate over the cache table, compare this new filter type with the existing ones
+        // if comply, check if reference to this row already exists, if so leave it be, if not, insert one
     }
 
     fn remove<C: 'static + Clone + Sized>(
         &mut self,
         sparse_index: SparseIndex,
     ) -> Result<C, &'static str> {
-        self.global_table
-            .get_mut(&CompType::new::<C>())
+        self.table
+            .get_mut(&std::intrinsics::type_id::<C>())
             .ok_or("comp type not in table")?
             .remove(sparse_index)
-        // todo, pudate cache
+        // todo, update cache
     }
 
-    fn raw_query(&self, filter: &Filter) -> SubTable {
+    fn raw_query(&self, filter: &Filter) -> QueryCache {
+        let num = filter.get_num();
+        let mut result = self.table.get(&filter.ids[1]).unwrap().as_simd().as_ref();
+        if num > 1 {
+            for index in 1..=num {
+                let id = filter.ids[index];
+                let intermediate = self.table.get(&id).unwrap().as_simd().as_ref();
+                if filter.get_first_invert_flag(index) {
+                    // invert the result so far
+                }
+                if filter.get_second_invert_flag(index) {
+                    // invert the intermediate
+                }
+                match filter.get_operation(index) {
+                    Operation::And => todo!(),
+                    Operation::Or => todo!(),
+                    Operation::Xor => todo!(),
+                }
+            }
+        }
         todo!()
     }
 
     fn query<T: Tuple>(&mut self, filter: &Filter) -> IterMut<T> {
         if filter.is_null() {
-            // get all the components of this type
-            todo!()
+            return IterMut::new_empty();
         }
-        let access = if let Some(val) = self.sub_tables.get(filter) {
+        let cache = if let Some(val) = self.cache_table.get(filter) {
             val
         } else {
-            self.sub_tables
+            self.cache_table
                 .insert(filter.clone(), self.raw_query(filter));
-            self.sub_tables.get(filter).unwrap()
+            self.cache_table.get(filter).unwrap()
         };
-        IterMut::new(access)
+        IterMut::new_from(cache)
     }
+}
+
+// a vector of sparse indices
+struct QueryCache(TypeErasedVec);
+
+enum Operation {
+    And,
+    Or,
+    Xor,
 }
 
 struct IterMut<'a, T: Tuple>(&'a mut T);
@@ -406,7 +393,7 @@ impl<'a, T: Tuple> IterMut<'a, T> {
         todo!()
     }
 
-    fn new(sub_table: &SubTable) -> Self {
+    fn new_from(cache: &QueryCache) -> Self {
         todo!()
     }
 }
@@ -419,19 +406,18 @@ impl<'a, T: Tuple> Iterator for IterMut<'a, T> {
 }
 
 //-----------------FILTER-----------------//
-// TODO: figure out the relationship between filters and its "sub/super filters"
-#[derive(Eq, Clone)]
+#[derive(Eq, Clone, Copy)]
 struct Filter {
-    // [n][0..2] = negation flag of all the previous evaluation; [n][2..4] = operation other than Not; [n][4..6] = negation flag for self(always single)
+    // first element is the total num of comptypes in this array;
+    // two negation flags, first for all the previous, second for self and an operation
     ops_flags: [u8; 9],
-    ids: [u64; 9],
+    // first being the final unique id after all the bitwise ops
+    ids: [TypeId; 9],
     #[cfg(debug_assertions)]
     names: [&'static str; 8],
 }
 impl Hash for Filter {
     fn hash<H: ~const std::hash::Hasher>(&self, state: &mut H) {
-        // first element in u64 array is the operation result of all the type id;
-        // first element in u8 array is the number of elements in this whole structure; if it's singleton then the u64 would be just the type id
         self.ops_flags[0].hash(state);
         self.ids[0].hash(state);
     }
@@ -446,6 +432,7 @@ impl Filter {
         Self {
             ops_flags: [0; 9],
             ids: [0; 9],
+            #[cfg(debug_assertions)]
             names: [&""; 8],
         }
     }
@@ -455,6 +442,18 @@ impl Filter {
     }
 
     fn is_null(&self) -> bool {
+        todo!()
+    }
+
+    fn get_first_invert_flag(&self, index: usize) -> bool {
+        todo!()
+    }
+
+    fn get_second_invert_flag(&self, index: usize) -> bool {
+        todo!()
+    }
+
+    fn get_operation(&self, index: usize) -> Operation {
         todo!()
     }
 }
@@ -483,9 +482,6 @@ impl Not for Filter {
         todo!()
     }
 }
-
-// a filter can be an archetype or a subset of an archetype
-
 //-----------------COMMAND-----------------//
 struct Command<'a> {
     table: &'a mut Table,
@@ -641,7 +637,8 @@ mod test {
 
     fn init() {
         let mut app = ECS::new();
-        app.add_system(test, 0, true, PLAYER & HEALTH);
+        let player_filter = PLAYER & HEALTH & MANA & !ENEMY;
+        app.add_system(test, 0, true, player_filter);
         for each in 0..10 {
             app.tick();
         }
@@ -652,7 +649,7 @@ mod test {
         let id1 = std::intrinsics::type_id::<Health>();
         let id2 = std::intrinsics::type_id::<Mana>();
         let id3 = std::intrinsics::type_id::<Player>();
-
-        assert!(id1 & !(id2 | id3) == !(id3 | id2) & id1)
+        let mask = id1 & !(id2 | id3);
+        assert!(mask == !id3 & (!id2 & id1));
     }
 }
