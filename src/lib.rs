@@ -513,28 +513,21 @@ impl Table {
         }
     }
 
-    fn query<'a, 'b, 'c, C: 'static + Clone + Sized>(
-        &'a mut self,
-        filter: &'a Filter,
-    ) -> Result<(&'b mut [C], &'c [usize]), &'static str> {
-        let data = self.get_dense::<C>()?;
-
+    fn query<'a, 'b>(&'a mut self, filter: &'a Filter) -> Result<&'b [usize], &'static str> {
         let bitset_index = self.filter_traverse(0, filter)?;
         let filtered_buffer = self.buffer_pool.get(bitset_index);
-        let target_sparse_vec = self.get_sparse(type_id::<C>())?;
 
         let shift = Simd::from_array([63usize; 64]);
         let one = Simd::from_array([1usize; 64]);
 
         for index in 0..filtered_buffer.len() {
-            filtered_buffer[index] =
-                !((filtered_buffer[index] >> shift) - one) & target_sparse_vec[index];
+            filtered_buffer[index] = !((filtered_buffer[index] >> shift) - one);
         }
 
         let result_slice = self.buffer_pool.get_slice(bitset_index);
 
         result_slice.sort_unstable_by(|a, b| b.cmp(a));
-        Ok((data, result_slice))
+        Ok(result_slice)
     }
 }
 
@@ -941,11 +934,17 @@ impl<'a> Command<'a> {
     }
 
     fn query<C: 'static + Clone + Sized>(&mut self) -> IterMut<C> {
-        if self.system.filter == Filter::NULL {
-            return IterMut::new_null_filter();
-        }
-        match self.table.query::<C>(&self.system.filter) {
-            Ok(val) => IterMut::new(val.0, val.1),
+        match self.table.get_dense::<C>() {
+            Ok(data) => {
+                if self.system.filter == Filter::NULL {
+                    IterMut::new_null_filter(data)
+                } else {
+                    match self.table.query(&self.system.filter) {
+                        Ok(dense_indices) => IterMut::new(data, dense_indices),
+                        Err(_) => IterMut::new_empty(),
+                    }
+                }
+            }
             Err(_) => IterMut::new_empty(),
         }
     }
@@ -1423,11 +1422,8 @@ mod test {
         table.insert::<Health>(Some(5), Health(666)).unwrap();
         table.insert::<Health>(None, Health(666777)).unwrap();
         let filter = MANA ^ HEALTH;
-        let (data, slice) = table.query::<Health>(&filter).unwrap();
-        let iter = IterMut::new(data, slice);
+        let slice = table.query(&filter).unwrap();
 
-        for each in iter {
-            println!("{:?}", each);
-        }
+        println!("{:?}", slice);
     }
 }
