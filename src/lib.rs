@@ -24,19 +24,37 @@ use std::alloc::{alloc, dealloc, realloc};
 use std::intrinsics::type_id;
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr, BitXor, Not};
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::simd::Simd;
 use std::slice::from_raw_parts_mut;
 use std::{alloc::Layout, fmt::Debug};
-use std::{println, todo};
+
+// caching idea, you can treat a row cache as a bitset indexed by a type id;
+// you can run that row cache thru the filter and yield a boolean value, which would determine if that row fits that filter;
+// this way you can cache all filters within the table and also cache all the rows and update them and run the updated row
+// thru the cached filters to see if they fit (remember to eliminate repeated filters by only hashing the computed id)
+// but a problem is that you need to loop thru all the cached filters all the time, which is very expensive
+
+// what is this paged array thing? i suspect that the os is having trouble issuing a continuous memory block for 30000 i32s
+
+// you can also circumvent the possible query overhead with multiple tables in the same system; tho these are more like worlds than scenes
+
+// for a closed world design consisted of numerous scenes you'd have a current loaded scene where each entity must be loaded in full
+// granularity while the background scenes can adapt a level of detail approximated update scheme
+// for an open world design you'd have a loaded area and rest of the world being dormant, loaded area obviously would need a full
+// granularity in the ecs but the rest can also just adapt a LoD pattern
+// how should this approximation algorithm be implemented? one obvious requires a load screen and the other has a dynamic loading pattern
+// and it seems the current insertion/removal design suits better with the open world one, maybe a "swap scene" and load the next scene
+
+// todo multi query, scheduler
 
 //-----------------STORAGE-----------------//
 type SparseIndex = usize;
 type DenseIndex = usize;
 type TypeId = u64;
 
-const MASK_HEAD: usize = 0b10000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000_;
-const MASK_TAIL: usize = 0b01111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111_;
+const MASK_HEAD: usize = 1 << (usize::BITS - 1);
+const MASK_TAIL: usize = !MASK_HEAD;
 
 trait Tuple: Sized + 'static {
     fn insert(
@@ -56,7 +74,14 @@ where
         table: &mut Table,
         sparse_index: Option<SparseIndex>,
     ) -> Result<(), &'static str> {
-        table.insert(sparse_index, self.0)?;
+        match sparse_index {
+            Some(index) => {
+                table.insert(Some(index), self.0)?;
+            }
+            None => {
+                let index = table.insert(None, self.0)?;
+            }
+        }
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -73,8 +98,16 @@ where
         table: &mut Table,
         sparse_index: Option<SparseIndex>,
     ) -> Result<(), &'static str> {
-        table.insert(sparse_index, self.0)?;
-        table.insert(sparse_index, self.1)?;
+        match sparse_index {
+            Some(index) => {
+                table.insert(Some(index), self.0)?;
+                table.insert(Some(index), self.1)?;
+            }
+            None => {
+                let index = table.insert(None, self.0)?;
+                table.insert(Some(index), self.1)?;
+            }
+        }
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -95,9 +128,18 @@ where
         table: &mut Table,
         sparse_index: Option<SparseIndex>,
     ) -> Result<(), &'static str> {
-        table.insert(sparse_index, self.0)?;
-        table.insert(sparse_index, self.1)?;
-        table.insert(sparse_index, self.2)?;
+        match sparse_index {
+            Some(index) => {
+                table.insert(Some(index), self.0)?;
+                table.insert(Some(index), self.1)?;
+                table.insert(Some(index), self.2)?;
+            }
+            None => {
+                let index = table.insert(None, self.0)?;
+                table.insert(Some(index), self.1)?;
+                table.insert(Some(index), self.2)?;
+            }
+        }
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -120,10 +162,20 @@ where
         table: &mut Table,
         sparse_index: Option<SparseIndex>,
     ) -> Result<(), &'static str> {
-        table.insert(sparse_index, self.0)?;
-        table.insert(sparse_index, self.1)?;
-        table.insert(sparse_index, self.2)?;
-        table.insert(sparse_index, self.3)?;
+        match sparse_index {
+            Some(index) => {
+                table.insert(Some(index), self.0)?;
+                table.insert(Some(index), self.1)?;
+                table.insert(Some(index), self.2)?;
+                table.insert(Some(index), self.3)?;
+            }
+            None => {
+                let index = table.insert(None, self.0)?;
+                table.insert(Some(index), self.1)?;
+                table.insert(Some(index), self.2)?;
+                table.insert(Some(index), self.3)?;
+            }
+        }
         Ok(())
     }
     fn remove(table: &mut Table, sparse_index: SparseIndex) -> Result<Self, &'static str> {
@@ -149,7 +201,6 @@ impl TypeErasedVec {
         let layout = Layout::new::<C>();
         assert!(layout.size() != 0, "zst");
         let repeated_layout = Layout::array::<C>(cap).unwrap();
-        // let (repeated_layout, offset) = layout.repeat(cap).unwrap();
         Self {
             ptr: unsafe { alloc(repeated_layout) },
             len: 0,
@@ -244,10 +295,7 @@ impl DenseVec {
         self.comp_vec.len - 1
     }
 
-    fn swap_remove_non_last<C: 'static + Clone + Sized>(
-        &mut self,
-        mut dense_index: DenseIndex,
-    ) -> C {
+    fn swap_remove_non_last<C: 'static + Clone + Sized>(&mut self, dense_index: DenseIndex) -> C {
         let value = self.comp_vec.as_slice::<C>()[dense_index].clone();
         self.as_slice()[dense_index] = *self.as_slice().last().unwrap();
         self.comp_vec.as_slice::<C>()[dense_index] =
@@ -265,7 +313,7 @@ impl DenseVec {
         val
     }
 
-    fn as_slice(&self) -> &mut [SparseIndex] {
+    fn as_slice<'a, 'b>(&'a self) -> &'b mut [SparseIndex] {
         self.sparse_index_vec.as_slice()
     }
 }
@@ -296,7 +344,7 @@ impl SparseSet {
                 self.as_slice()[sparse_index] = dense | MASK_HEAD;
                 Ok(())
             }
-            num => Err("sprase index taken"),
+            _ => Err("sprase index taken"),
         }
     }
 
@@ -322,7 +370,7 @@ impl SparseSet {
         }
     }
 
-    fn ensure_cap(&mut self, cap: usize) {
+    fn ensure_n_populate_cap(&mut self, cap: usize) {
         self.sparse_vec.ensure_cap(cap);
         self.sparse_vec.populate::<usize>(0);
     }
@@ -363,14 +411,14 @@ impl Table {
         }
     }
 
-    fn ensure_cap(&mut self, cap: usize) {
+    fn ensure_n_populate_cap(&mut self, cap: usize) {
         if self.num_of_components_column.cap >= cap {
             return;
         }
         self.num_of_components_column.ensure_cap(cap);
         self.num_of_components_column.populate::<usize>(0);
         for (_, v) in &mut self.table {
-            v.ensure_cap(cap);
+            v.ensure_n_populate_cap(cap);
         }
     }
 
@@ -378,7 +426,7 @@ impl Table {
         &mut self,
         sparse_index: Option<SparseIndex>,
         value: C,
-    ) -> Result<(), &'static str> {
+    ) -> Result<SparseIndex, &'static str> {
         let sparse_index = if let Some(val) = sparse_index {
             if val >= self.freehead {
                 return Err("attempting to write at an uninit index");
@@ -390,7 +438,7 @@ impl Table {
                 self.available_indices.pop();
                 index
             } else {
-                self.ensure_cap(self.freehead + 1);
+                self.ensure_n_populate_cap(self.freehead + 1);
                 self.num_of_components_column.populate::<usize>(0);
                 self.freehead += 1;
                 self.freehead - 1
@@ -402,7 +450,7 @@ impl Table {
             .or_insert(SparseSet::new::<C>(self.num_of_components_column.len))
             .write(sparse_index, value)?;
         self.num_of_components_column.as_slice::<usize>()[sparse_index] += 1;
-        Ok(())
+        Ok(sparse_index)
     }
 
     fn remove<C: 'static + Clone + Sized>(
@@ -442,14 +490,15 @@ impl Table {
 
     fn get_dense<'a, 'b, C: 'static + Clone + Sized>(
         &'a self,
-    ) -> Result<&'b mut [C], &'static str> {
-        Ok(self
+    ) -> Result<(&'b mut [C], &'b [usize]), &'static str> {
+        let access = self
             .table
             .get(&std::intrinsics::type_id::<C>())
-            .ok_or("type not in table")?
-            .dense_vec
-            .comp_vec
-            .as_slice::<C>())
+            .ok_or("type not in table")?;
+        Ok((
+            access.dense_vec.comp_vec.as_slice::<C>(),
+            access.dense_vec.as_slice(),
+        ))
     }
 
     fn load_single_sparse_cache(
@@ -513,7 +562,8 @@ impl Table {
         }
     }
 
-    fn query<'a, 'b>(&'a mut self, filter: &'a Filter) -> Result<&'b [usize], &'static str> {
+    // does not handle null filter
+    fn query_raw<'a, 'b>(&'a mut self, filter: &'a Filter) -> Result<BufferIndex, &'static str> {
         let bitset_index = self.filter_traverse(0, filter)?;
         let filtered_buffer = self.buffer_pool.get(bitset_index);
 
@@ -524,10 +574,40 @@ impl Table {
             filtered_buffer[index] = !((filtered_buffer[index] >> shift) - one);
         }
 
-        let result_slice = self.buffer_pool.get_slice(bitset_index);
+        Ok(bitset_index)
+    }
 
-        result_slice.sort_unstable_by(|a, b| b.cmp(a));
-        Ok(result_slice)
+    fn query<'a, 'b, C: 'static + Clone + Sized>(
+        &'a mut self,
+        filter: &'a Filter,
+    ) -> IterMut<'b, C> {
+        match self.get_dense::<C>() {
+            Ok((data, sparse_data)) => {
+                if filter == &Filter::NULL {
+                    // fluff data
+                    IterMut::new(
+                        data,
+                        self.buffer_pool.get_lookup_buffer(data.len()),
+                        sparse_data,
+                    )
+                } else {
+                    match self.query_raw(filter) {
+                        Ok(filter_buffer_index) => {
+                            let sparse_column = self.get_sparse(type_id::<C>()).unwrap();
+                            let filter_slice = self.buffer_pool.get(filter_buffer_index);
+                            for each in 0..filter_slice.len() {
+                                filter_slice[each] &= sparse_column[each];
+                            }
+                            let result_slice = self.buffer_pool.get_slice(filter_buffer_index);
+                            result_slice.sort_unstable_by(|a, b| b.cmp(a));
+                            IterMut::new(data, result_slice, sparse_data)
+                        }
+                        Err(_) => IterMut::new_empty(),
+                    }
+                }
+            }
+            Err(_) => IterMut::new_empty(),
+        }
     }
 }
 
@@ -614,14 +694,29 @@ impl BufferUnit {
 type BufferIndex = usize;
 struct BufferPool {
     buffers: Vec<BufferUnit>,
+    fluff_lookup_buffer: TypeErasedVec,
 }
 impl BufferPool {
     fn new(number_of_units: usize) -> Self {
-        let mut thing = Self { buffers: vec![] };
-        for each in 0..number_of_units {
+        let mut thing = Self {
+            buffers: vec![],
+            fluff_lookup_buffer: TypeErasedVec::new_empty::<usize>(64),
+        };
+        for _ in 0..number_of_units {
             thing.buffers.push(BufferUnit::new(2));
         }
         thing
+    }
+
+    // a vector of 0,1,2,3,4,5
+    fn get_lookup_buffer<'a, 'b>(&'a mut self, size: usize) -> &'b [usize] {
+        self.fluff_lookup_buffer.ensure_cap(size);
+        self.fluff_lookup_buffer.populate::<usize>(0usize);
+        let slice = self.fluff_lookup_buffer.as_slice::<usize>();
+        for each in 0..self.fluff_lookup_buffer.len {
+            slice[each] = each | MASK_HEAD;
+        }
+        &slice[0..size]
     }
 
     fn get<'a, 'b>(&'a self, index: BufferIndex) -> &'b mut [Simd<usize, 64>] {
@@ -707,18 +802,20 @@ impl BufferPool {
 struct IterMut<'a, C: Clone + 'static + Sized> {
     data: *mut C,
     data_len: usize,
+    sparse_data: *const usize,
     ptr: *const DenseIndex,
     end: *const DenseIndex,
     phantom: PhantomData<&'a C>,
 }
 impl<'a, C: Clone + 'static + Sized> IterMut<'a, C> {
-    fn new(data: &mut [C], dense_indices: &[DenseIndex]) -> Self {
+    fn new(data: &mut [C], dense_indices: &[DenseIndex], sparse_data: &[SparseIndex]) -> Self {
         Self {
             data: data.as_mut_ptr(),
             ptr: dense_indices.as_ptr_range().start,
             end: dense_indices.as_ptr_range().end,
             phantom: PhantomData,
             data_len: data.len(),
+            sparse_data: sparse_data.as_ptr(),
         }
     }
 
@@ -727,17 +824,14 @@ impl<'a, C: Clone + 'static + Sized> IterMut<'a, C> {
             data: null_mut::<C>(),
             ptr: null_mut::<DenseIndex>(),
             end: null_mut::<DenseIndex>(),
+            sparse_data: null::<usize>(),
             phantom: PhantomData,
             data_len: 0,
         }
     }
-
-    fn new_null_filter(data: &mut [C]) -> Self {
-        todo!()
-    }
 }
 impl<'a, C: Clone + 'static + Sized> Iterator for IterMut<'a, C> {
-    type Item = &'a mut C;
+    type Item = (&'a mut C, SparseIndex);
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
@@ -746,20 +840,15 @@ impl<'a, C: Clone + 'static + Sized> Iterator for IterMut<'a, C> {
                     panic!("outta bound for data vec")
                 }
                 let stuff = self.data.add(*self.ptr & MASK_TAIL).as_mut().unwrap();
+                let sparse_index = *self.sparse_data.add(*self.ptr & MASK_TAIL);
                 self.ptr = self.ptr.add(1);
-                Some(stuff)
+                Some((stuff, sparse_index))
             } else {
                 None
             }
         }
     }
 }
-
-// todo: caching idea, you can treat a row cache as a bitset indexed by a type id;
-// you can run that row cache thru the filter and yield a boolean value, which would determine if that row fits that filter;
-// this way you can cache all filters within the table and also cache all the rows and update them and run the updated row
-// thru the cached filters to see if they fit (remember to eliminate repeated filters by only hashing the computed id)
-// but a problem is that you need to loop thru all the cached filters all the time, which is very expensive
 
 //-----------------FILTER-----------------//
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -809,7 +898,7 @@ impl Filter {
         thing
     }
 
-    fn combine(mut first: Self, mut second: Self, op: Operation) -> Self {
+    fn combine(mut first: Self, second: Self, op: Operation) -> Self {
         assert!(first.nodes[0].is_some() == true);
         assert!(second.nodes[0].is_some() == true);
 
@@ -885,19 +974,19 @@ impl Filter {
 }
 impl BitAnd for Filter {
     type Output = Filter;
-    fn bitand(mut self, mut rhs: Self) -> Self::Output {
+    fn bitand(self, rhs: Self) -> Self::Output {
         Filter::combine(self, rhs, Operation::And)
     }
 }
 impl BitOr for Filter {
     type Output = Filter;
-    fn bitor(mut self, mut rhs: Self) -> Self::Output {
+    fn bitor(self, rhs: Self) -> Self::Output {
         Filter::combine(self, rhs, Operation::Or)
     }
 }
 impl BitXor for Filter {
     type Output = Filter;
-    fn bitxor(mut self, mut rhs: Self) -> Self::Output {
+    fn bitxor(self, rhs: Self) -> Self::Output {
         Filter::combine(self, rhs, Operation::Xor)
     }
 }
@@ -914,7 +1003,14 @@ impl Not for Filter {
         self
     }
 }
+
 //-----------------COMMAND-----------------//
+
+impl<'a> Debug for Command<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Command").finish()
+    }
+}
 struct Command<'a> {
     table: &'a mut Table,
     system: &'a mut System,
@@ -926,27 +1022,17 @@ impl<'a> Command<'a> {
 
     // how am i supposed to get that sparese index to even get that sparse index tho
     fn write<T: Tuple>(&mut self, comps: T, sparse_index: Option<SparseIndex>) {
+        // if this insertion fails it could end up with a partially inserted tuple of components
         comps.insert(self.table, sparse_index).unwrap();
     }
 
     fn remove<T: Tuple>(&mut self, sparse_index: SparseIndex) -> Result<T, &'static str> {
+        // same thing with remove
         T::remove(self.table, sparse_index)
     }
 
-    fn query<C: 'static + Clone + Sized>(&mut self) -> IterMut<C> {
-        match self.table.get_dense::<C>() {
-            Ok(data) => {
-                if self.system.filter == Filter::NULL {
-                    IterMut::new_null_filter(data)
-                } else {
-                    match self.table.query(&self.system.filter) {
-                        Ok(dense_indices) => IterMut::new(data, dense_indices),
-                        Err(_) => IterMut::new_empty(),
-                    }
-                }
-            }
-            Err(_) => IterMut::new_empty(),
-        }
+    fn query<'b, 'c, C: 'static + Clone + Sized>(&'b mut self) -> IterMut<'c, C> {
+        self.table.query(&self.system.filter)
     }
 }
 
@@ -961,11 +1047,32 @@ enum ExecutionFrequency {
 struct System {
     order: usize,
     frequency: ExecutionFrequency,
+    // cache this commmand
     func: fn(Command),
     run_times: usize,
     filter: Filter,
 }
+impl Debug for System {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("System")
+            .field("order", &self.order)
+            .field("frequency", &self.frequency)
+            .field("run_times", &self.run_times)
+            .field("filter", &self.filter)
+            .finish()
+    }
+}
 impl System {
+    fn new(order: usize, frequency: ExecutionFrequency, func: fn(Command), filter: Filter) -> Self {
+        Self {
+            order,
+            frequency,
+            func,
+            run_times: 0,
+            filter,
+        }
+    }
+
     fn run(&mut self, table: &mut Table) {
         (self.func)(Command::new(table, self));
         self.run_times += 1;
@@ -1038,13 +1145,9 @@ impl ECS {
             true => ExecutionFrequency::Once,
             false => ExecutionFrequency::Always,
         };
-        self.scheduler.new_pool.push(System {
-            order,
-            frequency,
-            func,
-            run_times: 0,
-            filter,
-        })
+        self.scheduler
+            .new_pool
+            .push(System::new(order, frequency, func, filter));
     }
 
     fn tick(&mut self) {
@@ -1097,12 +1200,6 @@ mod test {
         }
     }
 
-    #[derive(Clone, Debug)]
-    struct Data {
-        first: [u8; 8],
-        bool: [bool; 63],
-    }
-
     #[test]
     fn type_erased_vec() {
         let mut vec = TypeErasedVec::new_empty::<usize>(1);
@@ -1153,7 +1250,7 @@ mod test {
     #[test]
     fn sparse_set_insert_remove() {
         let mut sparse_set = SparseSet::new::<String>(1);
-        sparse_set.ensure_cap(64);
+        sparse_set.ensure_n_populate_cap(64);
 
         sparse_set.write::<String>(12, "value 12".into()).unwrap();
         assert!(
@@ -1190,7 +1287,7 @@ mod test {
 
         assert!(&string == &"value 12");
 
-        sparse_set.ensure_cap(200);
+        sparse_set.ensure_n_populate_cap(200);
         assert!(sparse_set.sparse_vec.len == 256);
         assert!(sparse_set.sparse_vec.cap == 256);
         assert!(sparse_set.dense_vec.comp_vec.len == 1);
@@ -1414,16 +1511,134 @@ mod test {
     }
 
     #[test]
-    fn query() {
+    fn query_raw() {
         let mut table = Table::new();
         for each in 1..=10 {
             table.insert::<Mana>(None, Mana(each * 2)).unwrap();
         }
         table.insert::<Health>(Some(5), Health(666)).unwrap();
         table.insert::<Health>(None, Health(666777)).unwrap();
-        let filter = MANA ^ HEALTH;
-        let slice = table.query(&filter).unwrap();
 
-        println!("{:?}", slice);
+        let filter = HEALTH & !MANA;
+        let index = table.query_raw(&filter).unwrap();
+
+        // println!(
+        //     "{:?}",
+        //     index
+        //         .iter()
+        //         .map(|x| if *x == 0 { 0 } else { 1 })
+        //         .collect::<Vec<usize>>()
+        // );
+    }
+
+    #[test]
+    fn query_iter() {
+        let mut table = Table::new();
+        // this takes around 5.5 secs to insert 30k components of the same type
+        for each in 1..=30000 {
+            table.insert::<Mana>(None, Mana(each * 2)).unwrap();
+        }
+
+        // 5.36s to insert the same amound of components but with 4 different types
+        // and for some reason even with querying it costs around 5.33s
+        // for each in 1..=7500 {
+        //     table.insert::<Mana>(None, Mana(each * 2)).unwrap();
+        //     table.insert::<Health>(None, Health(each * 2)).unwrap();
+        //     table.insert::<Player>(None, Player("each * 2")).unwrap();
+        //     table.insert::<Enemy>(None, Enemy("each * 2")).unwrap();
+        // }
+
+        // 14.4s for both insert and removal of 30k comps of the same type
+        // for each in 1..=30000 {
+        //     table.insert::<Mana>(None, Mana(each * 2)).unwrap();
+        // }
+        // for each in 1..=30000 {
+        //     table.remove::<Mana>(each).unwrap();
+        // }
+
+        // this is even weirder, 8.61s for insert(register) a column, ensure cap in one go and insert the rest
+        // i imagined reallocate multiple times would actually be slower
+        // table.insert::<Mana>(None, Mana(2)).unwrap();
+        // table.ensure_n_populate_cap(30000);
+        // for each in 2..=30000 {
+        //     table.insert::<Mana>(None, Mana(each * 2)).unwrap();
+        // }
+
+        // for each in 1..=30000 {
+        //     table.insert::<Mana>(None, Mana(each * 2)).unwrap();
+        // }
+
+        // let mut iter = table.query::<Mana>(&MANA);
+
+        // for each in iter {
+        //     each.0 .0 += 1;
+        // }
+    }
+
+    #[test]
+    fn command() {
+        let mut table = Table::new();
+        let filter = HEALTH;
+        let mut system = System::new(0, ExecutionFrequency::Always, system_add_entities, filter);
+        let mut command = Command::new(&mut table, &mut system);
+
+        for each in 0..10 {
+            command.write((Mana(100 * (each + 1)), Health(100)), None);
+        }
+
+        let mut iter = command.query::<Mana>();
+        command.write((Mana(100 * (1 + 111)), Health(100)), None);
+        command.remove::<(Mana,)>(5).unwrap();
+        for each in 0..10 {
+            println!("{:?}", iter.next().unwrap());
+        }
+    }
+
+    fn system_add_entities(mut com: Command) {
+        // for each in 1..5 {
+        com.write((Mana(100), Health(100)), None);
+        // }
+    }
+
+    fn system_print(mut com: Command) {
+        for (each, index) in com.query::<Health>() {
+            each.0 += 100;
+            println!("{:?}, {:?}", each, index);
+        }
+
+        // for each_row in com.query::<Health>() {
+        //     if each_row.has::<Mana>() & !each_row.has::<Enemy>() {
+        //         *each_row.get::<Mana>().unwrap() -= 20;
+        //         each_row.insert::<Enemy>(Enemy("uwu")).unwrap();
+        //     }
+        // }
+    }
+
+    #[test]
+    fn ecs() {
+        let mut ecs = ECS::new();
+
+        // todo make the iter sparse index based; maybe thru a layer of some kinda wrapper, so that it is possible
+        // for the table to check if any component is mutated
+
+        // global and local resources, one is visible to all systems and the other is local to a single system or a group of selected
+        // systems, or any systems that meet certain criteria like a tag or label,
+        // should probably be implemented as columns (actually probably not since they are unique and the only one),
+        // todo, move the look up column and the num of comps column into the table itself, just short cut the reference into the table,
+        // and it should double function as a flag column to get a free index so we can get rid the vector of free indices,
+        // we can have a fixed size buffer for a bunch of free indices
+
+        // ecs.add_global_resource::<ResType>(res);
+
+        // system explicit ordering; labeling(and label ordering); system sets; run criteria; states and state stack
+
+        // event writer and event handler
+
+        ecs.add_system(system_add_entities, 0, true, Filter::NULL);
+        ecs.add_system(system_print, 1, false, HEALTH);
+
+        // for each in 0..10 {
+        ecs.tick();
+        // }
     }
 }
