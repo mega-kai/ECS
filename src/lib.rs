@@ -7,6 +7,7 @@
 )]
 #![feature(
     alloc_layout_extra,
+    allocator_api,
     map_try_insert,
     core_intrinsics,
     const_trait_impl,
@@ -46,7 +47,7 @@ use std::{alloc::Layout, fmt::Debug};
 // how should this approximation algorithm be implemented? one obvious requires a load screen and the other has a dynamic loading pattern
 // and it seems the current insertion/removal design suits better with the open world one, maybe a "swap scene" and load the next scene
 
-// todo multi query, scheduler
+// todo multi query
 
 //-----------------STORAGE-----------------//
 type SparseIndex = usize;
@@ -1133,6 +1134,7 @@ struct ECS {
 }
 
 impl ECS {
+    // todo this should take a allocator with it
     fn new() -> Self {
         Self {
             table: Table::new(),
@@ -1161,7 +1163,6 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
-    use std::println;
 
     use super::*;
 
@@ -1617,9 +1618,11 @@ mod test {
     #[test]
     fn ecs() {
         let mut ecs = ECS::new();
-
-        // todo make the iter sparse index based; maybe thru a layer of some kinda wrapper, so that it is possible
-        // for the table to check if any component is mutated
+        let system = std::alloc::System;
+        let vec: Vec<u8> = std::vec::Vec::new_in(std::alloc::Global);
+        // todo make the iter sparse index based; i don't think i want the table to be able to detect if any component is changed
+        // instead i do want the table to know whether or not a system has mut access or read only access, as it would determine
+        // whether parallelism is appropriate;
 
         // global and local resources, one is visible to all systems and the other is local to a single system or a group of selected
         // systems, or any systems that meet certain criteria like a tag or label,
@@ -1633,6 +1636,12 @@ mod test {
         // system explicit ordering; labeling(and label ordering); system sets; run criteria; states and state stack
 
         // event writer and event handler
+
+        // saving is basically serialize and deserialize the whole ecs itself, table scheduler and all that
+
+        // need to be able to swap out the allocator, so no using just the default global allocator
+
+        // should also make a hashmap with a hash function that's tailored towards type id which are just u64 that are guaranteed to be unique
 
         ecs.add_system(system_add_entities, 0, true, Filter::NULL);
         ecs.add_system(system_print, 1, false, HEALTH);
