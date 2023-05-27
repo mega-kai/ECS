@@ -815,8 +815,8 @@ impl ECS {
         }
     }
 
-    ///
-    pub fn update(&mut self) -> bool {
+    /// returns a boolean value just so we know if the thing runs ok
+    pub fn tick(&mut self) -> bool {
         let result = (self.entry_point)(&mut self.table);
         self.table.free_all_buffers();
         self.table.reseal_all();
