@@ -733,14 +733,14 @@ impl Table {
         }
     }
 
-    /// will queue up the events added
+    /// fire an event, will initiate a event stack if it's not already present in the table, then push the event to that stack
     pub fn add_event<C: 'static + Clone + Sized>(&mut self, event: C) {
         self.events
             .entry(type_id::<C>())
             .or_insert(EventColumn::new_empty::<C>())
             .push::<C>(event);
     }
-    // todo make this iterator queue compatible
+    /// todo make this iterator queue compatible
     pub fn read_event<C: 'static + Clone + Sized>(&mut self) -> Result<IterMut, &'static str> {
         match self.events.get(&type_id::<C>()) {
             Some(queue) => Ok(IterMut::new(queue.as_slice().as_ptr_range())),
@@ -800,27 +800,24 @@ impl Iterator for IterMut {
 
 //-----------------ECS-----------------//
 pub struct ECS {
-    table: Table,
-    // these are more like entry points of stages rather than actual systems
-    entry_point: fn(&mut Table) -> bool,
+    pub table: Table,
+    entry_point: fn(&mut Table),
     // todo make it so the first time you query a filter it actually registers it,
     // and later ticks it would just get the cached filter
 }
 
 impl ECS {
-    pub fn new(entry_point: fn(&mut Table) -> bool) -> Self {
+    pub fn new(entry_point: fn(&mut Table)) -> Self {
         Self {
             table: Table::new(),
             entry_point,
         }
     }
 
-    /// returns a boolean value just so we know if the thing runs ok
-    pub fn tick(&mut self) -> bool {
-        let result = (self.entry_point)(&mut self.table);
+    pub fn tick(&mut self) {
+        (self.entry_point)(&mut self.table);
         self.table.free_all_buffers();
         self.table.reseal_all();
-        result
     }
 }
 
@@ -845,9 +842,7 @@ mod test {
     const ENEMY: Filter = Filter::from::<Enemy>();
     // mutable access detection -> change detection????
 
-    fn entry_point(table: &mut Table) -> bool {
-        false
-    }
+    fn entry_point(table: &mut Table) {}
     #[test]
     fn ecs() {
         let mut ecs = ECS::new(entry_point);
