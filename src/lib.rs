@@ -91,7 +91,7 @@ impl Debug for Filter {
 
 const NUM_OF_NODES: usize = 16;
 #[derive(Clone, PartialEq, Eq)]
-struct Filter {
+pub struct Filter {
     num_of_nodes: u8,
     num_of_ids: u8,
 
@@ -99,7 +99,7 @@ struct Filter {
     ids: [TypeId; NUM_OF_NODES],
 }
 impl Filter {
-    const fn from<C: Clone + 'static>() -> Self {
+    pub const fn from<C: Clone + 'static>() -> Self {
         let mut thing = Self {
             num_of_nodes: 1,
             num_of_ids: 1,
@@ -349,11 +349,13 @@ impl Drop for DenseColumn {
     }
 }
 
+// event is a temporary data that carries information across systems, an event is triggered when component/resources is changed
 struct EventColumn {
     ptr: *mut u8,
     len: usize,
     cap: usize,
     layout: Layout,
+    seal: usize,
 }
 impl EventColumn {
     fn new_empty<C: 'static + Clone + Sized>() -> Self {
@@ -364,6 +366,7 @@ impl EventColumn {
                 len: 0,
                 cap: 8,
                 layout,
+                seal: 0,
             }
         }
     }
@@ -375,41 +378,46 @@ impl EventColumn {
                 self.layout.repeat(self.cap).unwrap().0,
                 self.cap * 2 * self.layout.size(),
             );
+            self.cap *= 2;
         }
     }
 
-    fn push<C: 'static + Clone + Sized>(&mut self, value: C) -> DenseIndex {
+    /// this will reset the seal
+    fn clear_sealed_then_reseal(&mut self) {
+        let len = self.len - self.seal;
+        unsafe {
+            std::ptr::copy(
+                self.ptr.add(self.seal * self.layout.size()),
+                self.ptr,
+                len * self.layout.size(),
+            )
+        };
+        self.len = len;
+        self.seal = self.len;
+    }
+
+    fn push<C: 'static + Clone + Sized>(&mut self, value: C) {
         if self.len == self.cap {
             self.double();
         }
-        let dense_index = self.len;
+        unsafe { *(self.ptr as *mut C).add(self.len) = value };
         self.len += 1;
-        self.as_slice::<C>()[dense_index] = value;
-        dense_index
     }
 
     fn pop<C: 'static + Clone + Sized>(&mut self) -> C {
-        let value = self.as_slice::<C>().last().unwrap().clone();
         self.len -= 1;
+        let value = unsafe { (self.ptr as *mut C).add(self.len).as_ref().unwrap().clone() };
         value
     }
 
-    fn swap_remove<C: 'static + Clone + Sized>(&mut self, index: usize) -> C {
-        let value = self.as_slice::<C>()[index].clone();
-        self.as_slice::<C>()[index] = self.as_slice::<C>().last().unwrap().clone();
-        self.len -= 1;
-        value
-    }
-
-    fn as_slice<'a, 'b, C: 'static + Clone + Sized>(&'a self) -> &'b mut [C] {
-        unsafe { from_raw_parts_mut(self.ptr as *mut C, self.len) }
+    /// not mutable tho
+    fn as_slice<'a, 'b, C: 'static + Clone + Sized>(&'a self) -> &'b [C] {
+        unsafe { from_raw_parts(self.ptr as *mut C, self.len) }
     }
 }
 impl Drop for EventColumn {
     fn drop(&mut self) {
-        unsafe {
-            dealloc(self.ptr, self.layout.repeat(self.cap).unwrap().0);
-        }
+        unsafe { dealloc(self.ptr, self.layout.repeat(self.cap).unwrap().0) }
     }
 }
 
@@ -433,7 +441,7 @@ impl Drop for Resource {
     }
 }
 
-struct Table {
+pub struct Table {
     helpers: Vec<Column>,
     freehead: SparseIndex,
     // largest_occupied_index: SparseIndex,
@@ -483,7 +491,7 @@ impl Table {
         }
     }
 
-    fn insert_new<C: 'static + Clone + Sized>(&mut self, value: C) -> SparseIndex {
+    pub fn insert_new<C: 'static + Clone + Sized>(&mut self, value: C) -> SparseIndex {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
             if self.helpers[1].as_slice()[each] == 0 {
@@ -507,7 +515,7 @@ impl Table {
         sparse_index
     }
 
-    fn insert_at<C: 'static + Clone + Sized>(
+    pub fn insert_at<C: 'static + Clone + Sized>(
         &mut self,
         sparse_index: SparseIndex,
         value: C,
@@ -529,7 +537,7 @@ impl Table {
         }
     }
 
-    fn remove<C: 'static + Clone + Sized>(
+    pub fn remove<C: 'static + Clone + Sized>(
         &mut self,
         sparse_index: SparseIndex,
     ) -> Result<C, &'static str> {
@@ -666,8 +674,14 @@ impl Table {
         }
     }
 
+    fn reseal_all(&mut self) {
+        for (_, each) in &mut self.events {
+            each.clear_sealed_then_reseal();
+        }
+    }
+
     // todo deal with null filters
-    fn query(&mut self, filter: &Filter) -> IterMut {
+    pub fn query(&mut self, filter: &Filter) -> IterMut {
         let result_index = self.filter_traverse(0, filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
         let sparse_simd = self.helpers[0].as_simd();
@@ -680,19 +694,7 @@ impl Table {
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
 
-    fn read<'a, 'b, C: 'static + Clone + Sized>(
-        &'a self,
-        sparse_index: SparseIndex,
-    ) -> Option<&'b C> {
-        match self.table.get(&type_id::<C>()) {
-            Some((sparse_column, dense_column)) => Some(
-                &mut dense_column.as_slice::<C>()
-                    [sparse_column.as_slice()[sparse_index] & MASK_TAIL],
-            ),
-            None => None,
-        }
-    }
-    fn read_mut<'a, 'b, C: 'static + Clone + Sized>(
+    pub fn read<'a, 'b, C: 'static + Clone + Sized>(
         &'a self,
         sparse_index: SparseIndex,
     ) -> Option<&'b mut C> {
@@ -705,7 +707,7 @@ impl Table {
         }
     }
 
-    fn add_resource<C: 'static + Clone + Sized>(&mut self, res: C) -> Result<(), &'static str> {
+    pub fn add_resource<C: 'static + Clone + Sized>(&mut self, res: C) -> Result<(), &'static str> {
         if let Some(_) = self.resources.get(&type_id::<C>()) {
             Err("resource already present in table")
         } else {
@@ -714,7 +716,7 @@ impl Table {
             Ok(())
         }
     }
-    fn read_resource<'a, 'b, C: 'static + Clone + Sized>(
+    pub fn read_resource<'a, 'b, C: 'static + Clone + Sized>(
         &'a mut self,
     ) -> Result<&'b mut C, &'static str> {
         if let Some(res) = self.resources.get(&type_id::<C>()) {
@@ -723,7 +725,7 @@ impl Table {
             Err("resource not in table")
         }
     }
-    fn remove_resource<C: 'static + Clone + Sized>(&mut self) -> Result<C, &'static str> {
+    pub fn remove_resource<C: 'static + Clone + Sized>(&mut self) -> Result<C, &'static str> {
         if let Some(res) = self.resources.remove(&type_id::<C>()) {
             Ok(unsafe { (res.ptr as *mut C).as_mut().unwrap().clone() })
         } else {
@@ -732,27 +734,35 @@ impl Table {
     }
 
     /// will queue up the events added
-    fn add_event<C: 'static + Clone + Sized>(&mut self, event: C) {
+    pub fn add_event<C: 'static + Clone + Sized>(&mut self, event: C) {
         self.events
             .entry(type_id::<C>())
             .or_insert(EventColumn::new_empty::<C>())
             .push::<C>(event);
     }
-    fn read_event<C: 'static + Clone + Sized>(&mut self) -> Result<IterMut, &'static str> {
+    // todo make this iterator queue compatible
+    pub fn read_event<C: 'static + Clone + Sized>(&mut self) -> Result<IterMut, &'static str> {
         match self.events.get(&type_id::<C>()) {
-            Some(column) => Ok(IterMut::new(column.as_slice().as_ptr_range())),
+            Some(queue) => Ok(IterMut::new(queue.as_slice().as_ptr_range())),
             None => Err("event type not in the column"),
         }
     }
-
-    fn remove_event<C: 'static + Clone + Sized>(&mut self) -> Result<EventColumn, &'static str> {
+    pub fn remove_event<C: 'static + Clone + Sized>(&mut self) -> Result<(), &'static str> {
         self.events
             .remove(&type_id::<C>())
-            .ok_or("event type not in table")
+            .ok_or("event type not in table")?;
+        Ok(())
+    }
+
+    pub fn load() {
+        todo!()
+    }
+    pub fn save() {
+        todo!()
     }
 }
 
-struct IterMut {
+pub struct IterMut {
     ptr: *const usize,
     end: *const usize,
 }
@@ -788,193 +798,29 @@ impl Iterator for IterMut {
     }
 }
 
-//-----------------COMMAND-----------------//
-
-impl<'a> Debug for Command<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Command").finish()
-    }
-}
-struct Command<'a> {
-    table: &'a mut Table,
-    system: &'a mut System,
-}
-impl<'a> Command<'a> {
-    fn new(table: &'a mut Table, system: &'a mut System) -> Self {
-        Self { table, system }
-    }
-
-    fn read<'b, 'c, C: 'static + Clone + Sized>(
-        &'b self,
-        sparse_index: SparseIndex,
-    ) -> Option<&'c C> {
-        self.table.read(sparse_index)
-    }
-
-    fn read_mut<'b, 'c, C: 'static + Clone + Sized>(
-        &'b self,
-        sparse_index: SparseIndex,
-    ) -> Option<&'c mut C> {
-        self.table.read_mut(sparse_index)
-    }
-
-    fn insert_new<C: 'static + Clone + Sized>(&mut self, value: C) -> SparseIndex {
-        self.table.insert_new(value)
-    }
-
-    fn insert_at<C: 'static + Clone + Sized>(
-        &mut self,
-        sparse_index: SparseIndex,
-        value: C,
-    ) -> Result<(), &'static str> {
-        self.table.insert_at(sparse_index, value)
-    }
-
-    fn remove<C: 'static + Clone + Sized>(
-        &mut self,
-        sparse_index: SparseIndex,
-    ) -> Result<C, &'static str> {
-        self.table.remove(sparse_index)
-    }
-
-    fn query(&mut self) -> IterMut {
-        self.table.query(&self.system.filter)
-    }
-
-    // event writer and event handler; events are a special kind of resource; i think events come in queues, and they
-    // typically only last to the end of the next tick; should'nt have to register them tho, so mark with a static &str name
-    fn send_event<C: 'static + Clone + Sized>(&mut self) {}
-    // todo somehow remove event
-    fn read_event<C: 'static + Clone + Sized>(&mut self) -> IterMut {
-        // inevitably you have to iterate over the events queue to fish out the events you'd like
-        todo!()
-    }
-
-    // global/local resources, global to either all systems or to filtered systems; external inputs are also just resources;
-    // according to bevy, it is a singleton data that can be inserted into a table
-    fn add_resource<C: 'static + Clone + Sized>(&mut self) {}
-    fn read_resource<'b, 'c, C: 'static + Clone + Sized>(
-        &'b mut self,
-    ) -> Result<&'c mut C, &'static str> {
-        todo!()
-    }
-    fn remove_resource<C: 'static + Clone + Sized>(&mut self) -> Result<C, &'static str> {
-        todo!()
-    }
-}
-
-//-----------------SCHEDULER-----------------//
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-enum ExecutionFrequency {
-    Always,
-    Once,
-    // Timed(f64, f64),
-}
-
-struct System {
-    order: usize,
-    frequency: ExecutionFrequency,
-    // cache this commmand
-    func: fn(Command),
-    run_times: usize,
-    filter: Filter,
-}
-
-impl System {
-    fn new(order: usize, frequency: ExecutionFrequency, func: fn(Command), filter: Filter) -> Self {
-        Self {
-            order,
-            frequency,
-            func,
-            run_times: 0,
-            filter,
-        }
-    }
-
-    fn run(&mut self, table: &mut Table) {
-        (self.func)(Command::new(table, self));
-        self.run_times += 1;
-    }
-}
-
-impl PartialEq for System {
-    fn eq(&self, other: &Self) -> bool {
-        self.order == other.order
-    }
-}
-impl Eq for System {}
-impl PartialOrd for System {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.order.partial_cmp(&other.order)
-    }
-}
-impl Ord for System {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.order.cmp(&other.order)
-    }
-}
-
-struct Scheduler {
-    new_pool: Vec<System>,
-    queue: Vec<System>,
-}
-impl Scheduler {
-    fn new() -> Self {
-        Self {
-            new_pool: vec![],
-            queue: vec![],
-        }
-    }
-
-    fn prepare_queue(&mut self) {
-        self.queue.retain(|x| match x.frequency {
-            ExecutionFrequency::Always => return true,
-            ExecutionFrequency::Once => {
-                if x.run_times > 0 {
-                    return false;
-                } else {
-                    return true;
-                }
-            }
-        });
-        if !self.new_pool.is_empty() {
-            self.queue.append(&mut self.new_pool);
-            self.new_pool.clear();
-        }
-        self.queue.sort();
-    }
-}
-
-struct ECS {
+//-----------------ECS-----------------//
+pub struct ECS {
     table: Table,
-    scheduler: Scheduler,
+    // these are more like entry points of stages rather than actual systems
+    entry_point: fn(&mut Table) -> bool,
+    // todo make it so the first time you query a filter it actually registers it,
+    // and later ticks it would just get the cached filter
 }
 
 impl ECS {
-    // todo this should take a allocator with it
-    fn new() -> Self {
+    pub fn new(entry_point: fn(&mut Table) -> bool) -> Self {
         Self {
             table: Table::new(),
-            scheduler: Scheduler::new(),
+            entry_point,
         }
     }
 
-    fn add_system(&mut self, func: fn(Command), order: usize, once: bool, filter: Filter) {
-        let frequency = match once {
-            true => ExecutionFrequency::Once,
-            false => ExecutionFrequency::Always,
-        };
-        self.scheduler
-            .new_pool
-            .push(System::new(order, frequency, func, filter));
-    }
-
-    fn tick(&mut self) {
+    ///
+    pub fn update(&mut self) -> bool {
+        let result = (self.entry_point)(&mut self.table);
         self.table.free_all_buffers();
-        self.scheduler.prepare_queue();
-        for system in &mut self.scheduler.queue {
-            system.run(&mut self.table);
-        }
+        self.table.reseal_all();
+        result
     }
 }
 
@@ -999,28 +845,11 @@ mod test {
     const ENEMY: Filter = Filter::from::<Enemy>();
     // mutable access detection -> change detection????
 
-    // auto detect what kind of systems there are and seperate them into stages?
-
-    // system sets; states and state stack; run criteria;
-
-    // saving is basically serialize and deserialize the whole ecs itself, table scheduler and all that
-
-    // need to be able to swap out the allocator, so no using just the default global allocator
+    fn entry_point(table: &mut Table) -> bool {
+        false
+    }
     #[test]
     fn ecs() {
-        // let mut table = Table::new();
-        // for each in 0..3 {
-        //     table.insert_new(Mana(each * 100));
-        // }
-
-        // table.add_resource(Mana(10)).unwrap();
-
-        // println!("{:?}", table.read_resource::<Mana>().unwrap());
-        let mut column = EventColumn::new_empty::<Mana>();
-        for each in 0..10 {
-            column.push(Mana(100 * each));
-        }
-
-        println!("{:?}", column.as_slice::<Mana>());
+        let mut ecs = ECS::new(entry_point);
     }
 }
