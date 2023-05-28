@@ -740,10 +740,11 @@ impl Table {
             .or_insert(EventColumn::new_empty::<C>())
             .push::<C>(event);
     }
-    /// todo make this iterator queue compatible
-    pub fn read_event<C: 'static + Clone + Sized>(&mut self) -> Result<IterMut, &'static str> {
+    pub fn read_event<'a, 'b, C: 'static + Clone + Sized>(
+        &mut self,
+    ) -> Result<&'b [C], &'static str> {
         match self.events.get(&type_id::<C>()) {
-            Some(queue) => Ok(IterMut::new(queue.as_slice().as_ptr_range())),
+            Some(queue) => Ok(queue.as_slice::<C>()),
             None => Err("event type not in the column"),
         }
     }
@@ -845,6 +846,18 @@ mod test {
     fn entry_point(table: &mut Table) {}
     #[test]
     fn ecs() {
-        let mut ecs = ECS::new(entry_point);
+        // let mut ecs = ECS::new(entry_point);
+        let mut table = Table::new();
+        // table
+        //     .add_resource(Mana(1234))
+        //     .expect("resource already in table");
+        // table.remove_resource::<Mana>().unwrap();
+        // assert!(table.remove_resource::<Mana>().unwrap() == Mana(1234))
+        for each in 0..10 {
+            table.add_event(Mana(each));
+        }
+        println!("{:?}", table.read_event::<Mana>().unwrap());
+        table.remove_event::<Mana>().unwrap();
+        assert!(table.read_event::<Mana>().is_err());
     }
 }
