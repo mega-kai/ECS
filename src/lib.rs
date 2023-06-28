@@ -740,6 +740,11 @@ impl Table {
             .or_insert(EventColumn::new_empty::<C>())
             .push::<C>(event);
     }
+    pub fn register_event<C: 'static + Clone + Sized>(&mut self) {
+        self.events
+            .entry(type_id::<C>())
+            .or_insert(EventColumn::new_empty::<C>());
+    }
     pub fn read_event<'a, 'b, C: 'static + Clone + Sized>(
         &mut self,
     ) -> Result<&'b [C], &'static str> {
@@ -760,6 +765,15 @@ impl Table {
     }
     pub fn save() {
         todo!()
+    }
+
+    pub fn query_raw<'a, 'b, C: 'static + Clone + Sized>(
+        &'a self,
+    ) -> Result<&'b mut [C], &'static str> {
+        match self.table.get(&type_id::<C>()) {
+            Some((sparse_column, dense_column)) => Ok(dense_column.as_slice()),
+            None => Err("type not in table"),
+        }
     }
 }
 
