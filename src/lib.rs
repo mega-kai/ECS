@@ -356,6 +356,8 @@ struct EventColumn {
     cap: usize,
     layout: Layout,
     seal: usize,
+
+    handled: bool,
 }
 impl EventColumn {
     fn new_empty<C: 'static + Clone + Sized>() -> Self {
@@ -367,6 +369,8 @@ impl EventColumn {
                 cap: 8,
                 layout,
                 seal: 0,
+
+                handled: false,
             }
         }
     }
@@ -676,6 +680,12 @@ impl Table {
 
     fn reseal_all(&mut self) {
         for (_, each) in &mut self.events {
+            // since it's handled it should just be set to 0
+            if each.handled {
+                each.len = 0;
+                each.seal = 0;
+                each.handled = false;
+            }
             each.clear_sealed_then_reseal();
         }
     }
@@ -734,7 +744,7 @@ impl Table {
     }
 
     /// fire an event, will initiate a event stack if it's not already present in the table, then push the event to that stack
-    pub fn add_event<C: 'static + Clone + Sized>(&mut self, event: C) {
+    pub fn fire_event<C: 'static + Clone + Sized>(&mut self, event: C) {
         self.events
             .entry(type_id::<C>())
             .or_insert(EventColumn::new_empty::<C>())
@@ -745,11 +755,16 @@ impl Table {
             .entry(type_id::<C>())
             .or_insert(EventColumn::new_empty::<C>());
     }
-    pub fn read_event<'a, 'b, C: 'static + Clone + Sized>(
+
+    /// by calling this method you must handle all events of this type, since all events of this type will be flagged to be erased at the end of this tick
+    pub fn handle_event<'a, 'b, C: 'static + Clone + Sized>(
         &mut self,
     ) -> Result<&'b [C], &'static str> {
-        match self.events.get(&type_id::<C>()) {
-            Some(queue) => Ok(queue.as_slice::<C>()),
+        match self.events.get_mut(&type_id::<C>()) {
+            Some(queue) => {
+                queue.handled = true;
+                Ok(queue.as_slice::<C>())
+            }
             None => Err("event type not in the column"),
         }
     }
@@ -758,6 +773,14 @@ impl Table {
             .remove(&type_id::<C>())
             .ok_or("event type not in table")?;
         Ok(())
+    }
+    fn wipe_event<C: 'static + Clone + Sized>(&mut self) {
+        match self.events.get_mut(&type_id::<C>()) {
+            Some(queue) => {
+                todo!()
+            }
+            None => panic!("event type not in the column"),
+        }
     }
 
     pub fn load() {
@@ -858,20 +881,54 @@ mod test {
     // mutable access detection -> change detection????
 
     fn entry_point(table: &mut Table) {}
+
+    #[derive(Clone, Debug)]
+    struct TestEvent(usize);
+
     #[test]
     fn ecs() {
         // let mut ecs = ECS::new(entry_point);
-        let mut table = Table::new();
+        // let mut table = Table::new();
         // table
         //     .add_resource(Mana(1234))
         //     .expect("resource already in table");
         // table.remove_resource::<Mana>().unwrap();
         // assert!(table.remove_resource::<Mana>().unwrap() == Mana(1234))
+        // for each in 0..10 {
+        //     table.add_event(Mana(each));
+        // }
+        // println!("{:?}", table.handle_event::<Mana>().unwrap());
+        // table.remove_event::<Mana>().unwrap();
+        // assert!(table.handle_event::<Mana>().is_err());
+
+        let mut thing = ECS::new(entry_point);
+        thing.table.register_event::<TestEvent>();
         for each in 0..10 {
-            table.add_event(Mana(each));
+            thing.table.fire_event(TestEvent(each));
         }
-        println!("{:?}", table.read_event::<Mana>().unwrap());
-        table.remove_event::<Mana>().unwrap();
-        assert!(table.read_event::<Mana>().is_err());
+        // thing.table.handle_event::<TestEvent>().unwrap();
+        thing.tick();
+
+        for each in 10..20 {
+            thing.table.fire_event(TestEvent(each));
+        }
+        // thing.table.handle_event::<TestEvent>().unwrap();
+        thing.tick();
+
+        for each in 20..30 {
+            thing.table.fire_event(TestEvent(each));
+        }
+        thing.table.handle_event::<TestEvent>().unwrap();
+        thing.tick();
+
+        println!(
+            "{:?}",
+            thing
+                .table
+                .events
+                .get(&type_id::<TestEvent>())
+                .unwrap()
+                .as_slice::<TestEvent>()
+        );
     }
 }
