@@ -784,14 +784,6 @@ impl Table {
             .ok_or("event type not in table")?;
         Ok(())
     }
-    fn wipe_event<C: 'static + Clone + Sized>(&mut self) {
-        match self.events.get_mut(&type_id::<C>()) {
-            Some(queue) => {
-                todo!()
-            }
-            None => panic!("event type not in the column"),
-        }
-    }
 
     pub fn load() {
         todo!()
