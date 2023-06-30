@@ -756,6 +756,16 @@ impl Table {
             .or_insert(EventColumn::new_empty::<C>());
     }
 
+    /// unlike handle_event, this does not flag the event queue to be erased by the end of this tick
+    pub fn read_event<'a, 'b, C: 'static + Clone + Sized>(
+        &mut self,
+    ) -> Result<&'b [C], &'static str> {
+        match self.events.get_mut(&type_id::<C>()) {
+            Some(queue) => Ok(queue.as_slice::<C>()),
+            None => Err("event type not in the column"),
+        }
+    }
+
     /// by calling this method you must handle all events of this type, since all events of this type will be flagged to be erased at the end of this tick
     pub fn handle_event<'a, 'b, C: 'static + Clone + Sized>(
         &mut self,
