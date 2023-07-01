@@ -28,22 +28,6 @@ use std::ops::{BitAnd, BitOr, BitXor, Not, Range};
 use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{alloc::Layout, fmt::Debug};
-// caching idea, you can treat a row cache as a bitset indexed by a type id;
-// you can run that row cache thru the filter and yield a boolean value, which would determine if that row fits that filter;
-// this way you can cache all filters within the table and also cache all the rows and update them and run the updated row
-// thru the cached filters to see if they fit (remember to eliminate repeated filters by only hashing the computed id)
-// but a problem is that you need to loop thru all the cached filters all the time, which is very expensive
-
-// what is this paged array thing? i suspect that the os is having trouble issuing a continuous memory block for 30000 i32s
-
-// you can also circumvent the possible query overhead with multiple tables in the same system; tho these are more like worlds than scenes
-
-// for a closed world design consisted of numerous scenes you'd have a current loaded scene where each entity must be loaded in full
-// granularity while the background scenes can adapt a level of detail approximated update scheme
-// for an open world design you'd have a loaded area and rest of the world being dormant, loaded area obviously would need a full
-// granularity in the ecs but the rest can also just adapt a LoD pattern
-// how should this approximation algorithm be implemented? one obvious requires a load screen and the other has a dynamic loading pattern
-// and it seems the current insertion/removal design suits better with the open world one, maybe a "swap scene" and load the next scene
 
 //-----------------STORAGE-----------------//
 type SparseIndex = usize;
@@ -495,6 +479,13 @@ impl Table {
         }
     }
 
+    pub fn register_column<C: 'static + Clone + Sized>(&mut self) {
+        let cap = self.cap();
+        self.table
+            .entry(type_id::<C>())
+            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
+    }
+
     pub fn insert_new<C: 'static + Clone + Sized>(&mut self, value: C) -> SparseIndex {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
@@ -690,7 +681,6 @@ impl Table {
         }
     }
 
-    // todo deal with null filters
     pub fn query(&mut self, filter: &Filter) -> IterMut {
         let result_index = self.filter_traverse(0, filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
@@ -932,5 +922,9 @@ mod test {
                 .unwrap()
                 .as_slice::<TestEvent>()
         );
+
+        loop {
+            thing.tick();
+        }
     }
 }
