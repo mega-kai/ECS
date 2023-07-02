@@ -333,7 +333,6 @@ impl Drop for DenseColumn {
     }
 }
 
-// event is a temporary data that carries information across systems, an event is triggered when component/resources is changed
 struct EventColumn {
     ptr: *mut u8,
     len: usize,
@@ -409,11 +408,11 @@ impl Drop for EventColumn {
     }
 }
 
-struct Resource {
+struct State {
     ptr: *mut u8,
     layout: Layout,
 }
-impl Resource {
+impl State {
     fn new<C: 'static + Clone + Sized>(val: C) -> Self {
         unsafe {
             let layout = Layout::new::<C>();
@@ -423,7 +422,7 @@ impl Resource {
         }
     }
 }
-impl Drop for Resource {
+impl Drop for State {
     fn drop(&mut self) {
         unsafe { dealloc(self.ptr, self.layout) }
     }
@@ -436,7 +435,7 @@ pub struct Table {
     // so when you can clip at the largest taken
     // also maybe regularly dense up the columns
     table: HashMap<TypeId, (Column, DenseColumn)>,
-    resources: HashMap<TypeId, Resource>,
+    states: HashMap<TypeId, State>,
     events: HashMap<TypeId, EventColumn>,
 }
 
@@ -444,7 +443,7 @@ impl Table {
     fn new() -> Self {
         let mut result = Self {
             table: HashMap::new(),
-            resources: HashMap::new(),
+            states: HashMap::new(),
             events: HashMap::new(),
             helpers: vec![],
             freehead: 1,
@@ -707,29 +706,28 @@ impl Table {
         }
     }
 
-    pub fn add_resource<C: 'static + Clone + Sized>(&mut self, res: C) -> Result<(), &'static str> {
-        if let Some(_) = self.resources.get(&type_id::<C>()) {
-            Err("resource already present in table")
+    pub fn add_state<C: 'static + Clone + Sized>(&mut self, res: C) -> Result<(), &'static str> {
+        if let Some(_) = self.states.get(&type_id::<C>()) {
+            Err("state already present in table")
         } else {
-            self.resources
-                .insert(type_id::<C>(), Resource::new::<C>(res));
+            self.states.insert(type_id::<C>(), State::new::<C>(res));
             Ok(())
         }
     }
-    pub fn read_resource<'a, 'b, C: 'static + Clone + Sized>(
+    pub fn read_state<'a, 'b, C: 'static + Clone + Sized>(
         &'a mut self,
     ) -> Result<&'b mut C, &'static str> {
-        if let Some(res) = self.resources.get(&type_id::<C>()) {
+        if let Some(res) = self.states.get(&type_id::<C>()) {
             Ok(unsafe { (res.ptr as *mut C).cast::<C>().as_mut().unwrap() })
         } else {
-            Err("resource not in table")
+            Err("state not in table")
         }
     }
-    pub fn remove_resource<C: 'static + Clone + Sized>(&mut self) -> Result<C, &'static str> {
-        if let Some(res) = self.resources.remove(&type_id::<C>()) {
+    pub fn remove_state<C: 'static + Clone + Sized>(&mut self) -> Result<C, &'static str> {
+        if let Some(res) = self.states.remove(&type_id::<C>()) {
             Ok(unsafe { (res.ptr as *mut C).as_mut().unwrap().clone() })
         } else {
-            Err("resource not in table")
+            Err("state not in table")
         }
     }
 
@@ -879,20 +877,6 @@ mod test {
 
     #[test]
     fn ecs() {
-        // let mut ecs = ECS::new(entry_point);
-        // let mut table = Table::new();
-        // table
-        //     .add_resource(Mana(1234))
-        //     .expect("resource already in table");
-        // table.remove_resource::<Mana>().unwrap();
-        // assert!(table.remove_resource::<Mana>().unwrap() == Mana(1234))
-        // for each in 0..10 {
-        //     table.add_event(Mana(each));
-        // }
-        // println!("{:?}", table.handle_event::<Mana>().unwrap());
-        // table.remove_event::<Mana>().unwrap();
-        // assert!(table.handle_event::<Mana>().is_err());
-
         let mut thing = ECS::new(entry_point);
         thing.table.register_event::<TestEvent>();
         for each in 0..10 {
