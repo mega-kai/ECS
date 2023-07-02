@@ -333,81 +333,6 @@ impl Drop for DenseColumn {
     }
 }
 
-struct EventColumn {
-    ptr: *mut u8,
-    len: usize,
-    cap: usize,
-    layout: Layout,
-    seal: usize,
-
-    handled: bool,
-}
-impl EventColumn {
-    fn new_empty<C: 'static + Clone + Sized>() -> Self {
-        unsafe {
-            let layout = Layout::new::<C>();
-            Self {
-                ptr: alloc(layout.repeat(8).unwrap().0),
-                len: 0,
-                cap: 8,
-                layout,
-                seal: 0,
-
-                handled: false,
-            }
-        }
-    }
-
-    fn double(&mut self) {
-        unsafe {
-            self.ptr = realloc(
-                self.ptr,
-                self.layout.repeat(self.cap).unwrap().0,
-                self.cap * 2 * self.layout.size(),
-            );
-            self.cap *= 2;
-        }
-    }
-
-    /// this will reset the seal
-    fn clear_sealed_then_reseal(&mut self) {
-        let len = self.len - self.seal;
-        unsafe {
-            std::ptr::copy(
-                self.ptr.add(self.seal * self.layout.size()),
-                self.ptr,
-                len * self.layout.size(),
-            )
-        };
-        self.len = len;
-        self.seal = self.len;
-    }
-
-    fn push<C: 'static + Clone + Sized>(&mut self, value: C) {
-        if self.len == self.cap {
-            self.double();
-        }
-        unsafe { *(self.ptr as *mut C).add(self.len) = value };
-        self.len += 1;
-    }
-
-    fn pop<C: 'static + Clone + Sized>(&mut self) -> C {
-        self.len -= 1;
-        let value = unsafe { (self.ptr as *mut C).add(self.len).as_ref().unwrap().clone() };
-        value
-    }
-
-    /// not mutable tho
-    fn as_slice<'a, 'b, C: 'static + Clone + Sized>(&'a self) -> &'b [C] {
-        unsafe { from_raw_parts(self.ptr as *mut C, self.len) }
-    }
-}
-impl Drop for EventColumn {
-    fn drop(&mut self) {
-        unsafe { dealloc(self.ptr, self.layout.repeat(self.cap).unwrap().0) }
-    }
-}
-
 struct State {
     ptr: *mut u8,
     layout: Layout,
@@ -436,7 +361,6 @@ pub struct Table {
     // also maybe regularly dense up the columns
     table: HashMap<TypeId, (Column, DenseColumn)>,
     states: HashMap<TypeId, State>,
-    events: HashMap<TypeId, EventColumn>,
 }
 
 impl Table {
@@ -444,7 +368,6 @@ impl Table {
         let mut result = Self {
             table: HashMap::new(),
             states: HashMap::new(),
-            events: HashMap::new(),
             helpers: vec![],
             freehead: 1,
         };
@@ -668,19 +591,7 @@ impl Table {
         }
     }
 
-    fn reseal_all(&mut self) {
-        for (_, each) in &mut self.events {
-            // since it's handled it should just be set to 0
-            if each.handled {
-                each.len = 0;
-                each.seal = 0;
-                each.handled = false;
-            }
-            each.clear_sealed_then_reseal();
-        }
-    }
-
-    pub fn query(&mut self, filter: &Filter) -> IterMut {
+    pub fn query_column(&mut self, filter: &Filter) -> IterMut {
         let result_index = self.filter_traverse(0, filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
         let sparse_simd = self.helpers[0].as_simd();
@@ -693,7 +604,16 @@ impl Table {
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
 
-    pub fn read<'a, 'b, C: 'static + Clone + Sized>(
+    pub fn read_column<'a, 'b, C: 'static + Clone + Sized>(
+        &'a self,
+    ) -> Result<&'b mut [C], &'static str> {
+        match self.table.get(&type_id::<C>()) {
+            Some((sparse_column, dense_column)) => Ok(dense_column.as_slice()),
+            None => Err("type not in table"),
+        }
+    }
+
+    pub fn read_single<'a, 'b, C: 'static + Clone + Sized>(
         &'a self,
         sparse_index: SparseIndex,
     ) -> Option<&'b mut C> {
@@ -731,62 +651,11 @@ impl Table {
         }
     }
 
-    /// fire an event, will initiate a event stack if it's not already present in the table, then push the event to that stack
-    pub fn fire_event<C: 'static + Clone + Sized>(&mut self, event: C) {
-        self.events
-            .entry(type_id::<C>())
-            .or_insert(EventColumn::new_empty::<C>())
-            .push::<C>(event);
-    }
-    pub fn register_event<C: 'static + Clone + Sized>(&mut self) {
-        self.events
-            .entry(type_id::<C>())
-            .or_insert(EventColumn::new_empty::<C>());
-    }
-
-    /// unlike handle_event, this does not flag the event queue to be erased by the end of this tick
-    pub fn read_event<'a, 'b, C: 'static + Clone + Sized>(
-        &mut self,
-    ) -> Result<&'b [C], &'static str> {
-        match self.events.get_mut(&type_id::<C>()) {
-            Some(queue) => Ok(queue.as_slice::<C>()),
-            None => Err("event type not in the column"),
-        }
-    }
-
-    /// by calling this method you must handle all events of this type, since all events of this type will be flagged to be erased at the end of this tick
-    pub fn handle_event<'a, 'b, C: 'static + Clone + Sized>(
-        &mut self,
-    ) -> Result<&'b [C], &'static str> {
-        match self.events.get_mut(&type_id::<C>()) {
-            Some(queue) => {
-                queue.handled = true;
-                Ok(queue.as_slice::<C>())
-            }
-            None => Err("event type not in the column"),
-        }
-    }
-    pub fn remove_event<C: 'static + Clone + Sized>(&mut self) -> Result<(), &'static str> {
-        self.events
-            .remove(&type_id::<C>())
-            .ok_or("event type not in table")?;
-        Ok(())
-    }
-
     pub fn load() {
         todo!()
     }
     pub fn save() {
         todo!()
-    }
-
-    pub fn query_raw<'a, 'b, C: 'static + Clone + Sized>(
-        &'a self,
-    ) -> Result<&'b mut [C], &'static str> {
-        match self.table.get(&type_id::<C>()) {
-            Some((sparse_column, dense_column)) => Ok(dense_column.as_slice()),
-            None => Err("type not in table"),
-        }
     }
 }
 
@@ -845,70 +714,5 @@ impl ECS {
     pub fn tick(&mut self) {
         (self.entry_point)(&mut self.table);
         self.table.free_all_buffers();
-        self.table.reseal_all();
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[derive(Clone, Debug)]
-    struct Health(i32);
-    const HEALTH: Filter = Filter::from::<Health>();
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct Mana(i32);
-    const MANA: Filter = Filter::from::<Mana>();
-
-    #[derive(Clone, Debug)]
-    struct Player(&'static str);
-    const PLAYER: Filter = Filter::from::<Player>();
-
-    #[derive(Clone, Debug)]
-    struct Enemy(&'static str);
-    const ENEMY: Filter = Filter::from::<Enemy>();
-    // mutable access detection -> change detection????
-
-    fn entry_point(table: &mut Table) {}
-
-    #[derive(Clone, Debug)]
-    struct TestEvent(usize);
-
-    #[test]
-    fn ecs() {
-        let mut thing = ECS::new(entry_point);
-        thing.table.register_event::<TestEvent>();
-        for each in 0..10 {
-            thing.table.fire_event(TestEvent(each));
-        }
-        // thing.table.handle_event::<TestEvent>().unwrap();
-        thing.tick();
-
-        for each in 10..20 {
-            thing.table.fire_event(TestEvent(each));
-        }
-        // thing.table.handle_event::<TestEvent>().unwrap();
-        thing.tick();
-
-        for each in 20..30 {
-            thing.table.fire_event(TestEvent(each));
-        }
-        thing.table.handle_event::<TestEvent>().unwrap();
-        thing.tick();
-
-        println!(
-            "{:?}",
-            thing
-                .table
-                .events
-                .get(&type_id::<TestEvent>())
-                .unwrap()
-                .as_slice::<TestEvent>()
-        );
-
-        loop {
-            thing.tick();
-        }
     }
 }
