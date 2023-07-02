@@ -23,8 +23,9 @@ use core::panic;
 use hashbrown::HashMap;
 use std::alloc::{alloc, dealloc, realloc};
 use std::intrinsics::type_id;
-use std::mem::size_of;
+use std::mem::{size_of, zeroed};
 use std::ops::{BitAnd, BitOr, BitXor, Not, Range};
+use std::ptr::copy;
 use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{alloc::Layout, fmt::Debug};
@@ -252,7 +253,7 @@ struct DenseColumn {
     layout: Layout,
 }
 impl DenseColumn {
-    fn new<C: 'static + Clone + Sized>() -> Self {
+    fn new<C: 'static + Sized>() -> Self {
         let layout = Layout::new::<C>();
         unsafe {
             Self {
@@ -282,11 +283,7 @@ impl DenseColumn {
     }
 
     /// returns a "naive" dense index
-    fn push<C: 'static + Clone + Sized>(
-        &mut self,
-        value: C,
-        sparse_index: SparseIndex,
-    ) -> DenseIndex {
+    fn push<C: 'static + Sized>(&mut self, value: C, sparse_index: SparseIndex) -> DenseIndex {
         if self.len == self.cap {
             self.double();
         }
@@ -297,22 +294,31 @@ impl DenseColumn {
         dense_index
     }
 
-    /// pop both
-    fn pop<C: 'static + Clone + Sized>(&mut self) -> C {
-        let value = self.as_slice::<C>().last().unwrap().clone();
-        self.len -= 1;
-        value
+    fn pop<C: 'static + Sized>(&mut self) -> C {
+        unsafe {
+            let mut value: C = zeroed();
+            self.len -= 1;
+            copy::<C>(self.as_slice::<C>().last().unwrap(), &mut value, 1);
+            value
+        }
     }
 
-    fn swap_remove<C: 'static + Clone + Sized>(&mut self, dense_index: DenseIndex) -> C {
-        let value = self.as_slice::<C>()[dense_index].clone();
-        self.as_slice::<C>()[dense_index] = self.as_slice::<C>().last().unwrap().clone();
-        self.as_sparse_slice()[dense_index] = self.as_sparse_slice().last().unwrap().clone();
-        self.len -= 1;
-        value
+    fn swap_remove<C: 'static + Sized>(&mut self, dense_index: DenseIndex) -> C {
+        unsafe {
+            let mut value: C = zeroed();
+            copy::<C>(&mut self.as_slice::<C>()[dense_index], &mut value, 1);
+            copy::<C>(
+                self.as_slice::<C>().last().unwrap(),
+                &mut self.as_slice::<C>()[dense_index],
+                1,
+            );
+            self.as_sparse_slice()[dense_index] = *self.as_sparse_slice().last().unwrap();
+            self.len -= 1;
+            value
+        }
     }
 
-    fn as_slice<'a, 'b, C: 'static + Clone + Sized>(&'a self) -> &'b mut [C] {
+    fn as_slice<'a, 'b, C: 'static + Sized>(&'a self) -> &'b mut [C] {
         assert!(Layout::new::<C>() == self.layout);
         unsafe { from_raw_parts_mut(self.ptr as *mut C, self.len) }
     }
@@ -338,7 +344,7 @@ struct State {
     layout: Layout,
 }
 impl State {
-    fn new<C: 'static + Clone + Sized>(val: C) -> Self {
+    fn new<C: 'static + Sized>(val: C) -> Self {
         unsafe {
             let layout = Layout::new::<C>();
             let ptr = alloc(layout);
@@ -401,14 +407,14 @@ impl Table {
         }
     }
 
-    pub fn register_column<C: 'static + Clone + Sized>(&mut self) {
+    pub fn register_column<C: 'static + Sized>(&mut self) {
         let cap = self.cap();
         self.table
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
 
-    pub fn insert_new<C: 'static + Clone + Sized>(&mut self, value: C) -> SparseIndex {
+    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> SparseIndex {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
             if self.helpers[1].as_slice()[each] == 0 {
@@ -432,7 +438,7 @@ impl Table {
         sparse_index
     }
 
-    pub fn insert_at<C: 'static + Clone + Sized>(
+    pub fn insert_at<C: 'static + Sized>(
         &mut self,
         sparse_index: SparseIndex,
         value: C,
@@ -454,7 +460,7 @@ impl Table {
         }
     }
 
-    pub fn remove<C: 'static + Clone + Sized>(
+    pub fn remove<C: 'static + Sized>(
         &mut self,
         sparse_index: SparseIndex,
     ) -> Result<C, &'static str> {
@@ -604,16 +610,14 @@ impl Table {
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
 
-    pub fn read_column<'a, 'b, C: 'static + Clone + Sized>(
-        &'a self,
-    ) -> Result<&'b mut [C], &'static str> {
+    pub fn read_column<'a, 'b, C: 'static + Sized>(&'a self) -> Result<&'b mut [C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((sparse_column, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
         }
     }
 
-    pub fn read_single<'a, 'b, C: 'static + Clone + Sized>(
+    pub fn read_single<'a, 'b, C: 'static + Sized>(
         &'a self,
         sparse_index: SparseIndex,
     ) -> Option<&'b mut C> {
@@ -626,7 +630,7 @@ impl Table {
         }
     }
 
-    pub fn add_state<C: 'static + Clone + Sized>(&mut self, res: C) -> Result<(), &'static str> {
+    pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<(), &'static str> {
         if let Some(_) = self.states.get(&type_id::<C>()) {
             Err("state already present in table")
         } else {
@@ -634,18 +638,20 @@ impl Table {
             Ok(())
         }
     }
-    pub fn read_state<'a, 'b, C: 'static + Clone + Sized>(
-        &'a mut self,
-    ) -> Result<&'b mut C, &'static str> {
+    pub fn read_state<'a, 'b, C: 'static + Sized>(&'a mut self) -> Result<&'b mut C, &'static str> {
         if let Some(res) = self.states.get(&type_id::<C>()) {
             Ok(unsafe { (res.ptr as *mut C).cast::<C>().as_mut().unwrap() })
         } else {
             Err("state not in table")
         }
     }
-    pub fn remove_state<C: 'static + Clone + Sized>(&mut self) -> Result<C, &'static str> {
+    pub fn remove_state<C: 'static + Sized>(&mut self) -> Result<C, &'static str> {
         if let Some(res) = self.states.remove(&type_id::<C>()) {
-            Ok(unsafe { (res.ptr as *mut C).as_mut().unwrap().clone() })
+            unsafe {
+                let mut value: C = zeroed();
+                copy::<C>((res.ptr as *mut C).as_mut().unwrap(), &mut value, 1);
+                Ok(value)
+            }
         } else {
             Err("state not in table")
         }
