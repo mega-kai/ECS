@@ -23,7 +23,7 @@ use core::panic;
 use hashbrown::HashMap;
 use std::alloc::{alloc, dealloc, realloc};
 use std::intrinsics::type_id;
-use std::mem::{size_of, zeroed};
+use std::mem::{forget, size_of, zeroed};
 use std::ops::{BitAnd, BitOr, BitXor, Not, Range};
 use std::ptr::copy;
 use std::simd::Simd;
@@ -289,7 +289,10 @@ impl DenseColumn {
         }
         let dense_index = self.len;
         self.len += 1;
-        self.as_slice::<C>()[dense_index] = value;
+        unsafe {
+            copy(&value, &mut self.as_slice::<C>()[dense_index], 1);
+            forget(value);
+        }
         self.as_sparse_slice()[dense_index] = sparse_index;
         dense_index
     }
@@ -348,7 +351,9 @@ impl State {
         unsafe {
             let layout = Layout::new::<C>();
             let ptr = alloc(layout);
-            *(ptr as *mut C) = val;
+            copy::<C>(&val, ptr as *mut C, 1);
+            // so basically the thing is dropped after here
+            forget(val);
             Self { ptr, layout }
         }
     }
@@ -720,5 +725,37 @@ impl ECS {
     pub fn tick(&mut self) {
         (self.entry_point)(&mut self.table);
         self.table.free_all_buffers();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[derive(Debug)]
+    struct NoticeOnDrop {
+        str: String,
+    }
+    impl Drop for NoticeOnDrop {
+        fn drop(&mut self) {
+            println!("uwu dropped {:?}", self.str);
+        }
+    }
+    #[test]
+    fn test() {
+        let mut table = Table::new();
+        let uwu = NoticeOnDrop {
+            str: "1".to_string(),
+        };
+        let another_uwu = NoticeOnDrop {
+            str: "2".to_string(),
+        };
+        // let index = table.insert_new(uwu);
+        // table.read_column::<NoticeOnDrop>().unwrap()[0] = another_uwu;
+        // println!("{:?}", &table.read_column::<NoticeOnDrop>().unwrap()[..]);
+
+        table.add_state(uwu).unwrap();
+        *table.read_state::<NoticeOnDrop>().unwrap() = another_uwu;
+        // forget(uwu);
     }
 }
