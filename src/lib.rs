@@ -283,18 +283,22 @@ impl DenseColumn {
     }
 
     /// returns a "naive" dense index
-    fn push<C: 'static + Sized>(&mut self, value: C, sparse_index: SparseIndex) -> DenseIndex {
+    fn push<'a, 'b, C: 'static + Sized>(
+        &'a mut self,
+        value: C,
+        sparse_index: SparseIndex,
+    ) -> (DenseIndex, &'b mut C) {
         if self.len == self.cap {
             self.double();
         }
         let dense_index = self.len;
         self.len += 1;
+        self.as_sparse_slice()[dense_index] = sparse_index;
         unsafe {
             copy(&value, &mut self.as_slice::<C>()[dense_index], 1);
             forget(value);
         }
-        self.as_sparse_slice()[dense_index] = sparse_index;
-        dense_index
+        (dense_index, &mut self.as_slice::<C>()[dense_index])
     }
 
     fn pop<C: 'static + Sized>(&mut self) -> C {
@@ -429,7 +433,10 @@ impl Table {
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
 
-    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> SparseIndex {
+    pub fn insert_new<'a, 'b, C: 'static + Sized>(
+        &'a mut self,
+        value: C,
+    ) -> (SparseIndex, &'b mut C) {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
             if self.helpers[1].as_slice()[each] == 0 {
@@ -446,18 +453,18 @@ impl Table {
             .table
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
-        let dense_index = targe_dense.push(value, sparse_index);
+        let (dense_index, ptr) = targe_dense.push(value, sparse_index);
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
         targe_dense.as_sparse_slice()[dense_index] = sparse_index;
         self.helpers[1].as_slice()[sparse_index] += 1;
-        sparse_index
+        (sparse_index, ptr)
     }
 
-    pub fn insert_at<C: 'static + Sized>(
-        &mut self,
+    pub fn insert_at<'a, 'b, C: 'static + Sized>(
+        &'a mut self,
         sparse_index: SparseIndex,
         value: C,
-    ) -> Result<(), &'static str> {
+    ) -> Result<&'b mut C, &'static str> {
         let cap = self.cap();
         let (target_sparse, target_dense) = self
             .table
@@ -465,11 +472,11 @@ impl Table {
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
         match target_sparse.as_slice()[sparse_index] {
             0 => {
-                let dense_index = target_dense.push(value, sparse_index);
+                let (dense_index, ptr) = target_dense.push(value, sparse_index);
                 target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
                 target_dense.as_sparse_slice()[dense_index] = sparse_index;
                 self.helpers[1].as_slice()[sparse_index] += 1;
-                Ok(())
+                Ok(ptr)
             }
             _ => Err("sparse index at this type column is already taken"),
         }
