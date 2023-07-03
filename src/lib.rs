@@ -762,18 +762,25 @@ mod test {
             println!("uwu dropped {:?}", self.str);
         }
     }
+
+    struct Thing(usize);
+
     #[test]
     fn test() {
         let mut table = Table::new();
-        let uwu = NoticeOnDrop {
-            str: "1".to_string(),
-        };
+
+        for each in 0..100000 {
+            table.insert_new(Thing(each as usize));
+        }
+        // let uwu = NoticeOnDrop {
+        //     str: "1".to_string(),
+        // };
         // let another_uwu = NoticeOnDrop {
         //     str: "2".to_string(),
         // };
-        let index = table.insert_new(uwu);
+        // let index = table.insert_new(uwu);
         // println!("{:?}")
-        println!("{:?}", &table.remove::<NoticeOnDrop>(index).unwrap());
+        // println!("{:?}", &table.remove::<NoticeOnDrop>(index).unwrap());
 
         // table.read_column::<NoticeOnDrop>().unwrap()[0] = another_uwu;
         // println!("{:?}", &table.read_column::<NoticeOnDrop>().unwrap()[..]);
