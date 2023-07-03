@@ -23,7 +23,7 @@ use core::panic;
 use hashbrown::HashMap;
 use std::alloc::{alloc, dealloc, realloc};
 use std::intrinsics::type_id;
-use std::mem::{forget, size_of, zeroed};
+use std::mem::{forget, size_of, MaybeUninit};
 use std::ops::{BitAnd, BitOr, BitXor, Not, Range};
 use std::ptr::copy;
 use std::simd::Simd;
@@ -299,17 +299,23 @@ impl DenseColumn {
 
     fn pop<C: 'static + Sized>(&mut self) -> C {
         unsafe {
-            let mut value: C = zeroed();
+            let mut value: MaybeUninit<C> = MaybeUninit::uninit();
+            copy::<C>(self.as_slice::<C>().last().unwrap(), value.as_mut_ptr(), 1);
             self.len -= 1;
-            copy::<C>(self.as_slice::<C>().last().unwrap(), &mut value, 1);
-            value
+            // *self.as_slice::<C>().last().unwrap()
+            // *(self.ptr as *mut C).add(self.len + 1)
+            value.assume_init()
         }
     }
 
     fn swap_remove<C: 'static + Sized>(&mut self, dense_index: DenseIndex) -> C {
         unsafe {
-            let mut value: C = zeroed();
-            copy::<C>(&mut self.as_slice::<C>()[dense_index], &mut value, 1);
+            let mut value: MaybeUninit<C> = MaybeUninit::uninit();
+            copy::<C>(
+                &mut self.as_slice::<C>()[dense_index],
+                value.as_mut_ptr(),
+                1,
+            );
             copy::<C>(
                 self.as_slice::<C>().last().unwrap(),
                 &mut self.as_slice::<C>()[dense_index],
@@ -317,7 +323,7 @@ impl DenseColumn {
             );
             self.as_sparse_slice()[dense_index] = *self.as_sparse_slice().last().unwrap();
             self.len -= 1;
-            value
+            value.assume_init()
         }
     }
 
@@ -330,6 +336,8 @@ impl DenseColumn {
         unsafe { from_raw_parts_mut(self.sparse_ptr as *mut usize, self.len) }
     }
 }
+
+// todo drop with type
 impl Drop for DenseColumn {
     fn drop(&mut self) {
         unsafe {
@@ -358,8 +366,10 @@ impl State {
         }
     }
 }
+
 impl Drop for State {
     fn drop(&mut self) {
+        // println!("state dropped uwu");
         unsafe { dealloc(self.ptr, self.layout) }
     }
 }
@@ -615,6 +625,7 @@ impl Table {
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
 
+    /// read the dense column
     pub fn read_column<'a, 'b, C: 'static + Sized>(&'a self) -> Result<&'b mut [C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((sparse_column, dense_column)) => Ok(dense_column.as_slice()),
@@ -653,9 +664,12 @@ impl Table {
     pub fn remove_state<C: 'static + Sized>(&mut self) -> Result<C, &'static str> {
         if let Some(res) = self.states.remove(&type_id::<C>()) {
             unsafe {
-                let mut value: C = zeroed();
-                copy::<C>((res.ptr as *mut C).as_mut().unwrap(), &mut value, 1);
-                Ok(value)
+                let mut value: MaybeUninit<C> = MaybeUninit::uninit();
+                copy::<C>((res.ptr as *mut C).as_mut().unwrap(), value.as_mut_ptr(), 1);
+                // then it gets dropped but in a type erased way, which means that it can't call the destructor of that type
+                // but rather just drop the portion originally on the stack
+                drop(res);
+                Ok(value.assume_init())
             }
         } else {
             Err("state not in table")
@@ -747,15 +761,20 @@ mod test {
         let uwu = NoticeOnDrop {
             str: "1".to_string(),
         };
-        let another_uwu = NoticeOnDrop {
-            str: "2".to_string(),
-        };
-        // let index = table.insert_new(uwu);
+        // let another_uwu = NoticeOnDrop {
+        //     str: "2".to_string(),
+        // };
+        let index = table.insert_new(uwu);
+        // println!("{:?}")
+        println!("{:?}", &table.remove::<NoticeOnDrop>(index).unwrap());
+
         // table.read_column::<NoticeOnDrop>().unwrap()[0] = another_uwu;
         // println!("{:?}", &table.read_column::<NoticeOnDrop>().unwrap()[..]);
 
-        table.add_state(uwu).unwrap();
-        *table.read_state::<NoticeOnDrop>().unwrap() = another_uwu;
+        // table.add_state(uwu).unwrap();
+        // *table.read_state::<NoticeOnDrop>().unwrap() = another_uwu;
+        // println!("{:?}", &table.remove_state::<NoticeOnDrop>().unwrap());
+        // table.read_state::<NoticeOnDrop>().unwrap();
         // forget(uwu);
     }
 }
