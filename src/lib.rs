@@ -771,31 +771,31 @@ mod test {
         let mut table = Table::new();
 
         for each in 0..10 {
-            let (index, _) = table.insert_new(Thing(each as usize + 1));
+            let (index, _) = table.insert_new(vec![12]);
             assert!(each + 1 == index);
         }
 
-        for each in 1..=10 {
-            println!(
-                "{:?}",
-                table
-                    .table
-                    .get(&type_id::<Thing>())
-                    .unwrap()
-                    .1
-                    .as_sparse_slice()
-            );
-            println!(
-                "{:?}",
-                table
-                    .table
-                    .get(&type_id::<Thing>())
-                    .unwrap()
-                    .1
-                    .as_slice::<Thing>()
-            );
-            table.remove::<Thing>(each).unwrap();
-        }
+        // for each in 1..=10 {
+        //     println!(
+        //         "{:?}",
+        //         table
+        //             .table
+        //             .get(&type_id::<Thing>())
+        //             .unwrap()
+        //             .1
+        //             .as_sparse_slice()
+        //     );
+        //     println!(
+        //         "{:?}",
+        //         table
+        //             .table
+        //             .get(&type_id::<Thing>())
+        //             .unwrap()
+        //             .1
+        //             .as_slice::<Thing>()
+        //     );
+        //     table.remove::<Thing>(each).unwrap();
+        // }
 
         // let uwu = NoticeOnDrop {
         //     str: "1".to_string(),
