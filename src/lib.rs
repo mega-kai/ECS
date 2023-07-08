@@ -240,10 +240,11 @@ impl Column {
         self.as_simd()[self.cap / (64 * 2)..].fill(Simd::splat(0));
     }
 
-    fn as_slice<'a, 'b>(&'a self) -> &'b mut [usize] {
+    fn as_slice(&self) -> &mut [usize] {
         unsafe { from_raw_parts_mut(self.ptr as *mut usize, self.cap) }
     }
 
+    // this is also very very dangerous
     fn as_simd<'a, 'b>(&'a self) -> &'b mut [Simd<usize, 64>] {
         unsafe { from_raw_parts_mut(self.ptr as *mut Simd<usize, 64>, self.cap / 64) }
     }
@@ -307,7 +308,7 @@ impl DenseColumn {
         // println!("success")
     }
 
-    /// returns a "naive" dense index
+    /// returns a "naive" dense index, also super dangerous
     fn push<'a, 'b, C: 'static + Sized>(
         &'a mut self,
         value: C,
@@ -356,13 +357,13 @@ impl DenseColumn {
         }
     }
 
-    // this slice may very well be rendered obsolete once the pointer is updated
+    // omg this is wildly unsafe
     fn as_slice<'a, 'b, C: 'static + Sized>(&'a self) -> &'b mut [C] {
         assert!(Layout::new::<C>() == self.layout);
         unsafe { from_raw_parts_mut(self.ptr as *mut C, self.len) }
     }
 
-    fn as_sparse_slice<'a, 'b>(&'a self) -> &'b mut [usize] {
+    fn as_sparse_slice(&self) -> &mut [usize] {
         unsafe { from_raw_parts_mut(self.sparse_ptr as *mut usize, self.len) }
     }
 }
@@ -456,10 +457,7 @@ impl Table {
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
 
-    pub fn insert_new<'a, 'b, C: 'static + Sized>(
-        &'a mut self,
-        value: C,
-    ) -> (SparseIndex, &'b mut C) {
+    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> (SparseIndex, &mut C) {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
             if self.helpers[1].as_slice()[each] == 0 {
@@ -483,11 +481,11 @@ impl Table {
         (sparse_index, ptr)
     }
 
-    pub fn insert_at<'a, 'b, C: 'static + Sized>(
-        &'a mut self,
+    pub fn insert_at<C: 'static + Sized>(
+        &mut self,
         sparse_index: SparseIndex,
         value: C,
-    ) -> Result<&'b mut C, &'static str> {
+    ) -> Result<&mut C, &'static str> {
         let cap = self.cap();
         let (target_sparse, target_dense) = self
             .table
@@ -656,17 +654,14 @@ impl Table {
     }
 
     /// read the dense column
-    pub fn read_column<'a, 'b, C: 'static + Sized>(&'a self) -> Result<&'b mut [C], &'static str> {
+    pub fn read_column<C: 'static + Sized>(&self) -> Result<&mut [C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((_, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
         }
     }
 
-    pub fn read<'a, 'b, C: 'static + Sized>(
-        &'a self,
-        sparse_index: SparseIndex,
-    ) -> Option<&'b mut C> {
+    pub fn read<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> Option<&mut C> {
         match self.table.get(&type_id::<C>()) {
             Some((sparse_column, dense_column)) => Some(
                 &mut dense_column.as_slice::<C>()
@@ -684,7 +679,7 @@ impl Table {
             Ok(())
         }
     }
-    pub fn read_state<'a, 'b, C: 'static + Sized>(&'a mut self) -> Result<&'b mut C, &'static str> {
+    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<&mut C, &'static str> {
         if let Some(res) = self.states.get(&type_id::<C>()) {
             Ok(unsafe { (res.ptr as *mut C).cast::<C>().as_mut().unwrap() })
         } else {
@@ -805,6 +800,14 @@ mod test {
             let val = table.remove::<Thing>(each).unwrap();
             assert_eq!(val.0, each);
         }
+
+        let mut thing = 0;
+
+        let another = &mut thing;
+
+        // let anooother = &mut thing;
+        // println!("{:?}", &thing);
+        // *another += 1;
 
         // for each in 1..=10 {
         //     println!(
