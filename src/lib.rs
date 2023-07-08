@@ -16,14 +16,15 @@
     const_type_name,
     portable_simd,
     array_zip,
-    slice_as_chunks
+    slice_as_chunks,
+    pointer_is_aligned
 )]
 
 use core::panic;
-use hashbrown::HashMap;
 use std::alloc::{alloc, dealloc, realloc};
+use std::collections::HashMap;
 use std::intrinsics::type_id;
-use std::mem::{forget, size_of, MaybeUninit};
+use std::mem::{forget, MaybeUninit};
 use std::ops::{BitAnd, BitOr, BitXor, Not, Range};
 use std::ptr::copy;
 use std::simd::Simd;
@@ -33,7 +34,6 @@ use std::{alloc::Layout, fmt::Debug};
 //-----------------STORAGE-----------------//
 type SparseIndex = usize;
 type DenseIndex = usize;
-type DenseColumnIndex = usize;
 type BufferIndex = usize;
 type TypeId = u64;
 
@@ -211,7 +211,7 @@ impl Column {
     /// it is guranteed that the column would be zeroed and can be diveded whole by 64
     fn new(size: usize) -> Self {
         assert!(size % 64 == 0);
-        let mut result = Self {
+        let result = Self {
             ptr: unsafe { alloc(Layout::new::<usize>().repeat(size).unwrap().0) },
             cap: size,
         };
@@ -220,13 +220,22 @@ impl Column {
     }
 
     fn double(&mut self) {
-        self.ptr = unsafe {
-            realloc(
+        unsafe {
+            let ptr = realloc(
                 self.ptr,
                 Layout::new::<usize>().repeat(self.cap).unwrap().0,
-                size_of::<usize>() * self.cap * 2,
-            )
+                Layout::new::<usize>()
+                    .repeat(self.cap * 2)
+                    .unwrap()
+                    .0
+                    .size(),
+            );
+            if ptr.is_null() {
+                panic!("nullptr")
+            }
+            self.ptr = ptr;
         };
+
         self.cap *= 2;
         self.as_simd()[self.cap / (64 * 2)..].fill(Simd::splat(0));
     }
@@ -253,33 +262,49 @@ struct DenseColumn {
     layout: Layout,
 }
 impl DenseColumn {
+    // this is where the major jankness is at
     fn new<C: 'static + Sized>() -> Self {
         let layout = Layout::new::<C>();
         unsafe {
             Self {
-                ptr: alloc(layout.repeat(8).unwrap().0),
-                sparse_ptr: alloc(Layout::new::<usize>().repeat(8).unwrap().0),
+                ptr: alloc(layout.repeat(4).unwrap().0),
+                sparse_ptr: alloc(Layout::new::<usize>().repeat(4).unwrap().0),
                 len: 0,
-                cap: 8,
+                cap: 4,
                 layout,
             }
         }
     }
 
+    // maybe you can box leak this whole thing and reclaim it if doing some change, which also sounds like a massive hack
     fn double(&mut self) {
         unsafe {
-            self.ptr = realloc(
+            let ptr = realloc(
                 self.ptr,
                 self.layout.repeat(self.cap).unwrap().0,
-                self.layout.size() * self.cap * 2,
+                self.layout.repeat(self.cap * 2).unwrap().0.size(),
             );
-            self.sparse_ptr = realloc(
+            if ptr.is_null() {
+                panic!("null ptr")
+            }
+            self.ptr = ptr;
+
+            let ptr_sparse = realloc(
                 self.sparse_ptr,
                 Layout::new::<usize>().repeat(self.cap).unwrap().0,
-                size_of::<usize>() * self.cap * 2,
-            )
+                Layout::new::<usize>()
+                    .repeat(self.cap * 2)
+                    .unwrap()
+                    .0
+                    .size(),
+            );
+            if ptr_sparse.is_null() {
+                panic!("null ptr")
+            }
+            self.sparse_ptr = ptr_sparse;
         }
         self.cap *= 2;
+        // println!("success")
     }
 
     /// returns a "naive" dense index
@@ -288,7 +313,7 @@ impl DenseColumn {
         value: C,
         sparse_index: SparseIndex,
     ) -> (DenseIndex, &'b mut C) {
-        if self.len == self.cap {
+        if self.len >= self.cap {
             self.double();
         }
         let dense_index = self.len;
@@ -331,6 +356,7 @@ impl DenseColumn {
         }
     }
 
+    // this slice may very well be rendered obsolete once the pointer is updated
     fn as_slice<'a, 'b, C: 'static + Sized>(&'a self) -> &'b mut [C] {
         assert!(Layout::new::<C>() == self.layout);
         unsafe { from_raw_parts_mut(self.ptr as *mut C, self.len) }
@@ -341,7 +367,6 @@ impl DenseColumn {
     }
 }
 
-// todo drop with type
 impl Drop for DenseColumn {
     fn drop(&mut self) {
         unsafe {
@@ -364,7 +389,8 @@ impl State {
             let layout = Layout::new::<C>();
             let ptr = alloc(layout);
             copy::<C>(&val, ptr as *mut C, 1);
-            // so basically the thing is dropped after here
+            // *(ptr as *mut C) = val;
+            // so basically the thing is dropped after here without calling the destructor
             forget(val);
             Self { ptr, layout }
         }
@@ -381,9 +407,6 @@ impl Drop for State {
 pub struct Table {
     helpers: Vec<Column>,
     freehead: SparseIndex,
-    // largest_occupied_index: SparseIndex,
-    // so when you can clip at the largest taken
-    // also maybe regularly dense up the columns
     table: HashMap<TypeId, (Column, DenseColumn)>,
     states: HashMap<TypeId, State>,
 }
@@ -397,7 +420,7 @@ impl Table {
             freehead: 1,
         };
 
-        for each in 0..10 {
+        for _ in 0..10 {
             result.helpers.push(Column::new(64));
         }
         // 0 -> available, 1 -> in use
@@ -635,12 +658,12 @@ impl Table {
     /// read the dense column
     pub fn read_column<'a, 'b, C: 'static + Sized>(&'a self) -> Result<&'b mut [C], &'static str> {
         match self.table.get(&type_id::<C>()) {
-            Some((sparse_column, dense_column)) => Ok(dense_column.as_slice()),
+            Some((_, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
         }
     }
 
-    pub fn read_single<'a, 'b, C: 'static + Sized>(
+    pub fn read<'a, 'b, C: 'static + Sized>(
         &'a self,
         sparse_index: SparseIndex,
     ) -> Option<&'b mut C> {
@@ -770,9 +793,17 @@ mod test {
     fn test() {
         let mut table = Table::new();
 
-        for each in 0..10 {
-            let (index, _) = table.insert_new(vec![12]);
-            assert!(each + 1 == index);
+        // for each in 0..10 {
+        //     let (index, _) = table.insert_new(vec![12]);
+        //     assert!(each + 1 == index);
+        // }
+        for each in 0..100000 {
+            table.insert_new(Thing(each + 1));
+        }
+
+        for each in 1..100000 {
+            let val = table.remove::<Thing>(each).unwrap();
+            assert_eq!(val.0, each);
         }
 
         // for each in 1..=10 {
