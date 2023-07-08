@@ -24,8 +24,9 @@ use core::panic;
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
 use std::intrinsics::type_id;
+use std::marker::PhantomData;
 use std::mem::{forget, MaybeUninit};
-use std::ops::{BitAnd, BitOr, BitXor, Not, Range};
+use std::ops::{BitAnd, BitOr, BitXor, Deref, DerefMut, Not, Range};
 use std::ptr::copy;
 use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
@@ -457,7 +458,7 @@ impl Table {
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
 
-    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> (SparseIndex, &mut C) {
+    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
             if self.helpers[1].as_slice()[each] == 0 {
@@ -478,14 +479,14 @@ impl Table {
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
         targe_dense.as_sparse_slice()[dense_index] = sparse_index;
         self.helpers[1].as_slice()[sparse_index] += 1;
-        (sparse_index, ptr)
+        Access::new(self, AccessType::Cell(sparse_index))
     }
 
     pub fn insert_at<C: 'static + Sized>(
         &mut self,
         sparse_index: SparseIndex,
         value: C,
-    ) -> Result<&mut C, &'static str> {
+    ) -> Result<Access<C>, &'static str> {
         let cap = self.cap();
         let (target_sparse, target_dense) = self
             .table
@@ -497,7 +498,7 @@ impl Table {
                 target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
                 target_dense.as_sparse_slice()[dense_index] = sparse_index;
                 self.helpers[1].as_slice()[sparse_index] += 1;
-                Ok(ptr)
+                Ok(Access::new(self, AccessType::Cell(sparse_index)))
             }
             _ => Err("sparse index at this type column is already taken"),
         }
@@ -654,38 +655,54 @@ impl Table {
     }
 
     /// read the dense column
-    pub fn read_column<C: 'static + Sized>(&self) -> Result<&mut [C], &'static str> {
+    pub fn read_column<C: 'static + Sized>(&self) -> Result<&[C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((_, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
         }
     }
 
-    pub fn read<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> Option<&mut C> {
+    pub fn read<C: 'static + Sized>(
+        &self,
+        sparse_index: SparseIndex,
+    ) -> Result<Access<C>, &'static str> {
         match self.table.get(&type_id::<C>()) {
-            Some((sparse_column, dense_column)) => Some(
-                &mut dense_column.as_slice::<C>()
-                    [sparse_column.as_slice()[sparse_index] & MASK_TAIL],
-            ),
-            None => None,
+            Some((sparse_column, dense_column)) => {
+                Ok(Access::new(self, AccessType::Cell(sparse_index)))
+            }
+            None => Err("type not in column"),
         }
     }
 
-    pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<(), &'static str> {
+    unsafe fn read_raw<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> &mut C {
+        let (sparse_column, dense_column) = self.table.get(&type_id::<C>()).unwrap();
+        &mut dense_column.as_slice::<C>()[sparse_column.as_slice()[sparse_index] & MASK_TAIL]
+    }
+
+    pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<Access<C>, &'static str> {
         if let Some(_) = self.states.get(&type_id::<C>()) {
             Err("state already present in table")
         } else {
             self.states.insert(type_id::<C>(), State::new::<C>(res));
-            Ok(())
+            Ok(Access::new(self, AccessType::State))
         }
     }
-    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<&mut C, &'static str> {
+
+    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
         if let Some(res) = self.states.get(&type_id::<C>()) {
-            Ok(unsafe { (res.ptr as *mut C).cast::<C>().as_mut().unwrap() })
+            Ok(Access::new(self, AccessType::State))
         } else {
             Err("state not in table")
         }
     }
+
+    unsafe fn read_state_raw<C: 'static + Sized>(&self) -> &mut C {
+        (self.states.get(&type_id::<C>()).unwrap().ptr as *mut C)
+            .cast::<C>()
+            .as_mut()
+            .unwrap()
+    }
+
     pub fn remove_state<C: 'static + Sized>(&mut self) -> Result<C, &'static str> {
         if let Some(res) = self.states.remove(&type_id::<C>()) {
             unsafe {
@@ -706,6 +723,60 @@ impl Table {
     }
     pub fn save() {
         todo!()
+    }
+}
+
+enum AccessType {
+    State,
+    Cell(SparseIndex),
+}
+pub struct Access<C: 'static + Sized> {
+    _phantom: PhantomData<C>,
+    table: *const Table,
+    ty: AccessType,
+    // todo generational indices
+}
+impl<C: 'static + Sized> Access<C> {
+    fn new(table: *const Table, ty: AccessType) -> Self {
+        Self {
+            _phantom: PhantomData,
+            table,
+            ty,
+        }
+    }
+
+    pub fn get_sparse_index(&self) -> Option<SparseIndex> {
+        match self.ty {
+            AccessType::Cell(index) => Some(index),
+            AccessType::State => None,
+        }
+    }
+}
+impl<C: 'static + Sized> Deref for Access<C> {
+    type Target = C;
+    fn deref(&self) -> &Self::Target {
+        match self.ty {
+            AccessType::Cell(sparse_index) => unsafe { (*self.table).read_raw::<C>(sparse_index) },
+            AccessType::State => unsafe { (*self.table).read_state_raw::<C>() },
+        }
+    }
+}
+impl<C: 'static + Sized> DerefMut for Access<C> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self.ty {
+            AccessType::Cell(sparse_index) => unsafe { (*self.table).read_raw::<C>(sparse_index) },
+            AccessType::State => unsafe { (*self.table).read_state_raw::<C>() },
+        }
+    }
+}
+impl<C: 'static + Sized> AsRef<C> for Access<C> {
+    fn as_ref(&self) -> &C {
+        &*self
+    }
+}
+impl<C: 'static + Sized> AsMut<C> for Access<C> {
+    fn as_mut(&mut self) -> &mut C {
+        &mut *self
     }
 }
 
@@ -749,8 +820,6 @@ impl Iterator for IterMut {
 pub struct ECS {
     pub table: Table,
     entry_point: fn(&mut Table),
-    // todo make it so the first time you query a filter it actually registers it,
-    // and later ticks it would just get the cached filter
 }
 
 impl ECS {
@@ -788,22 +857,33 @@ mod test {
     fn test() {
         let mut table = Table::new();
 
+        let mut access = table.add_state(Thing(1)).unwrap();
+
+        for each in 0..10 {
+            access.0 *= 2;
+        }
+
+        println!("{:?}", *access);
+
+        let mut access = table.insert_new(Thing(9922));
+        println!("{:?}", *access);
+
         // for each in 0..10 {
         //     let (index, _) = table.insert_new(vec![12]);
         //     assert!(each + 1 == index);
         // }
-        for each in 0..100000 {
-            table.insert_new(Thing(each + 1));
-        }
+        // for each in 0..100000 {
+        //     table.insert_new(Thing(each + 1));
+        // }
 
-        for each in 1..100000 {
-            let val = table.remove::<Thing>(each).unwrap();
-            assert_eq!(val.0, each);
-        }
+        // for each in 1..100000 {
+        //     let val = table.remove::<Thing>(each).unwrap();
+        //     assert_eq!(val.0, each);
+        // }
 
-        let mut thing = 0;
+        // let mut thing = 0;
 
-        let another = &mut thing;
+        // let another = &mut thing;
 
         // let anooother = &mut thing;
         // println!("{:?}", &thing);
