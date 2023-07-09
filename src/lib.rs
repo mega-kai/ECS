@@ -222,6 +222,7 @@ impl Column {
         };
 
         result.as_simd().fill(Simd::splat(0));
+        result.as_gen_simd().fill(Simd::splat(0));
         result
     }
 
@@ -349,6 +350,7 @@ impl DenseColumn {
         let dense_index = self.len;
         self.len += 1;
         self.as_sparse_slice()[dense_index] = sparse_index;
+        // todo why not just use ptr.add() + move
         unsafe {
             copy(&value, &mut self.as_slice::<C>()[dense_index], 1);
             forget(value);
@@ -694,26 +696,6 @@ impl Table {
         }
     }
 
-    // for rn we'll keep the read from sparse index function
-    // pub fn read<C: 'static + Sized>(
-    //     &self,
-    //     sparse_index: SparseIndex,
-    // ) -> Result<Access<C>, &'static str> {
-    //     match self.table.get(&type_id::<C>()) {
-    //         Some((sparse_column, dense_column)) => {
-    //             if sparse_index == 0
-    //                 || sparse_index >= sparse_column.cap
-    //                 || sparse_column.as_slice()[sparse_index] == 0
-    //             {
-    //                 return Err("invalid sparse index");
-    //             }
-    //             let gen = sparse_column.as_gen_slice()[sparse_index];
-    //             Ok(Access::new(self, AccessType::Cell(sparse_index), gen))
-    //         }
-    //         None => Err("type not in column"),
-    //     }
-    // }
-
     // states don't have generations
     pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<Access<C>, &'static str> {
         if let Some(state) = self.states.get(&type_id::<C>()) {
@@ -723,7 +705,7 @@ impl Table {
             Ok(Access::new(self, AccessType::State, !0))
         }
     }
-    pub fn read_current_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
+    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
         if let Some(res) = self.states.get(&type_id::<C>()) {
             Ok(Access::new(self, AccessType::State, !0))
         } else {
@@ -780,7 +762,6 @@ pub struct Access<C: 'static + Sized> {
     _phantom: PhantomData<C>,
     table: *const Table,
     ty: AccessType,
-    // todo might not need generations to use state??
     gen: Generation,
 }
 impl<C: 'static + Sized> Access<C> {
