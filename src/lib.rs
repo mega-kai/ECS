@@ -37,6 +37,7 @@ type SparseIndex = usize;
 type DenseIndex = usize;
 type BufferIndex = usize;
 type TypeId = u64;
+type Generation = usize;
 
 const MASK_HEAD: usize = 1 << (usize::BITS - 1);
 const MASK_TAIL: usize = !MASK_HEAD;
@@ -207,6 +208,8 @@ impl Not for Filter {
 struct Column {
     ptr: *mut u8,
     cap: usize,
+
+    gen_ptr: *mut u8,
 }
 impl Column {
     /// it is guranteed that the column would be zeroed and can be diveded whole by 64
@@ -214,8 +217,10 @@ impl Column {
         assert!(size % 64 == 0);
         let result = Self {
             ptr: unsafe { alloc(Layout::new::<usize>().repeat(size).unwrap().0) },
+            gen_ptr: unsafe { alloc(Layout::new::<usize>().repeat(size).unwrap().0) },
             cap: size,
         };
+
         result.as_simd().fill(Simd::splat(0));
         result
     }
@@ -235,10 +240,25 @@ impl Column {
                 panic!("nullptr")
             }
             self.ptr = ptr;
+
+            let gen_ptr = realloc(
+                self.gen_ptr,
+                Layout::new::<usize>().repeat(self.cap).unwrap().0,
+                Layout::new::<usize>()
+                    .repeat(self.cap * 2)
+                    .unwrap()
+                    .0
+                    .size(),
+            );
+            if gen_ptr.is_null() {
+                panic!("nullptr")
+            }
+            self.gen_ptr = gen_ptr;
         };
 
         self.cap *= 2;
         self.as_simd()[self.cap / (64 * 2)..].fill(Simd::splat(0));
+        self.as_gen_simd()[self.cap / (64 * 2)..].fill(Simd::splat(0));
     }
 
     fn as_slice(&self) -> &mut [usize] {
@@ -248,6 +268,14 @@ impl Column {
     // this is also very very dangerous
     fn as_simd<'a, 'b>(&'a self) -> &'b mut [Simd<usize, 64>] {
         unsafe { from_raw_parts_mut(self.ptr as *mut Simd<usize, 64>, self.cap / 64) }
+    }
+
+    fn as_gen_slice(&self) -> &mut [Generation] {
+        unsafe { from_raw_parts_mut(self.gen_ptr as *mut usize, self.cap) }
+    }
+
+    fn as_gen_simd<'a, 'b>(&'a self) -> &'b mut [Simd<Generation, 64>] {
+        unsafe { from_raw_parts_mut(self.gen_ptr as *mut Simd<usize, 64>, self.cap / 64) }
     }
 }
 impl Drop for Column {
@@ -391,8 +419,6 @@ impl State {
             let layout = Layout::new::<C>();
             let ptr = alloc(layout);
             copy::<C>(&val, ptr as *mut C, 1);
-            // *(ptr as *mut C) = val;
-            // so basically the thing is dropped after here without calling the destructor
             forget(val);
             Self { ptr, layout }
         }
@@ -448,90 +474,6 @@ impl Table {
 
         for each in self.cap() / (2 * 64)..self.cap() / 64 {
             self.helpers[0].as_simd()[each] = SIMD_START + Simd::splat(64 * each);
-        }
-    }
-
-    pub fn register_column<C: 'static + Sized>(&mut self) {
-        let cap = self.cap();
-        self.table
-            .entry(type_id::<C>())
-            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
-    }
-
-    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
-        let sparse_index = self.freehead;
-        for each in sparse_index + 1..self.cap() {
-            if self.helpers[1].as_slice()[each] == 0 {
-                self.freehead = each;
-                break;
-            }
-        }
-        if sparse_index == self.freehead {
-            self.double();
-            self.freehead = self.cap() / 2;
-        }
-        let cap = self.cap();
-        let (target_sparse, targe_dense) = self
-            .table
-            .entry(type_id::<C>())
-            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
-        let (dense_index, ptr) = targe_dense.push(value, sparse_index);
-        target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
-        targe_dense.as_sparse_slice()[dense_index] = sparse_index;
-        self.helpers[1].as_slice()[sparse_index] += 1;
-        Access::new(self, AccessType::Cell(sparse_index))
-    }
-
-    pub fn insert_at<C: 'static + Sized>(
-        &mut self,
-        sparse_index: SparseIndex,
-        value: C,
-    ) -> Result<Access<C>, &'static str> {
-        let cap = self.cap();
-        let (target_sparse, target_dense) = self
-            .table
-            .entry(type_id::<C>())
-            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
-        match target_sparse.as_slice()[sparse_index] {
-            0 => {
-                let (dense_index, ptr) = target_dense.push(value, sparse_index);
-                target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
-                target_dense.as_sparse_slice()[dense_index] = sparse_index;
-                self.helpers[1].as_slice()[sparse_index] += 1;
-                Ok(Access::new(self, AccessType::Cell(sparse_index)))
-            }
-            _ => Err("sparse index at this type column is already taken"),
-        }
-    }
-
-    pub fn remove<C: 'static + Sized>(
-        &mut self,
-        sparse_index: SparseIndex,
-    ) -> Result<C, &'static str> {
-        let (target_sparse, target_dense) = self
-            .table
-            .get_mut(&type_id::<C>())
-            .ok_or("type not in table")?;
-        match target_sparse.as_slice()[sparse_index] {
-            0 => Err("sparse index at this type column is empty"),
-            _ => {
-                let dense_index = target_sparse.as_slice()[sparse_index] & MASK_TAIL;
-                target_sparse.as_slice()[sparse_index] = 0;
-                self.helpers[1].as_slice()[sparse_index] -= 1;
-                if self.helpers[1].as_slice()[sparse_index] == 0 && sparse_index < self.freehead {
-                    self.freehead = sparse_index;
-                }
-                // last element
-                let value = if dense_index == target_dense.len - 1 {
-                    target_dense.pop()
-                } else {
-                    let val = target_dense.swap_remove::<C>(dense_index);
-                    let sparse_index_to_change = target_dense.as_sparse_slice()[dense_index];
-                    target_sparse.as_slice()[sparse_index_to_change] = dense_index | MASK_HEAD;
-                    val
-                };
-                Ok(value)
-            }
         }
     }
 
@@ -641,6 +583,12 @@ impl Table {
         }
     }
 
+    pub fn register_column<C: 'static + Sized>(&mut self) {
+        let cap = self.cap();
+        self.table
+            .entry(type_id::<C>())
+            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
+    }
     pub fn query_column(&mut self, filter: &Filter) -> IterMut {
         let result_index = self.filter_traverse(0, filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
@@ -653,69 +601,167 @@ impl Table {
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
-
-    /// read the dense column
-    pub fn read_column<C: 'static + Sized>(&self) -> Result<&[C], &'static str> {
+    pub unsafe fn read_column<C: 'static + Sized>(&self) -> Result<&[C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((_, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
         }
     }
 
-    pub fn read<C: 'static + Sized>(
-        &self,
-        sparse_index: SparseIndex,
-    ) -> Result<Access<C>, &'static str> {
-        match self.table.get(&type_id::<C>()) {
-            Some((sparse_column, dense_column)) => {
-                Ok(Access::new(self, AccessType::Cell(sparse_index)))
+    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
+        let sparse_index = self.freehead;
+        for each in sparse_index + 1..self.cap() {
+            if self.helpers[1].as_slice()[each] == 0 {
+                self.freehead = each;
+                break;
             }
-            None => Err("type not in column"),
+        }
+        if sparse_index == self.freehead {
+            self.double();
+            self.freehead = self.cap() / 2;
+        }
+        let cap = self.cap();
+        let (target_sparse, targe_dense) = self
+            .table
+            .entry(type_id::<C>())
+            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
+        let (dense_index, ptr) = targe_dense.push(value, sparse_index);
+        target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
+        // update generation
+        target_sparse.as_gen_slice()[sparse_index] += 1;
+        let gen = target_sparse.as_gen_slice()[sparse_index];
+        targe_dense.as_sparse_slice()[dense_index] = sparse_index;
+        self.helpers[1].as_slice()[sparse_index] += 1;
+        Access::new(self, AccessType::Cell(sparse_index), gen)
+    }
+    pub fn insert_at<C: 'static + Sized>(
+        &mut self,
+        sparse_index: SparseIndex,
+        value: C,
+    ) -> Result<Access<C>, &'static str> {
+        let cap = self.cap();
+        let (target_sparse, target_dense) = self
+            .table
+            .entry(type_id::<C>())
+            .or_insert((Column::new(cap), DenseColumn::new::<C>()));
+        match target_sparse.as_slice()[sparse_index] {
+            0 => {
+                let (dense_index, ptr) = target_dense.push(value, sparse_index);
+                target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
+                target_sparse.as_gen_slice()[sparse_index] += 1;
+                let gen = target_sparse.as_gen_slice()[sparse_index];
+                target_dense.as_sparse_slice()[dense_index] = sparse_index;
+                self.helpers[1].as_slice()[sparse_index] += 1;
+                Ok(Access::new(self, AccessType::Cell(sparse_index), gen))
+            }
+            _ => Err("sparse index at this type column is already taken"),
+        }
+    }
+    pub fn remove<C: 'static + Sized>(&mut self, access: Access<C>) -> Result<C, &'static str> {
+        let sparse_index = access
+            .get_sparse_index()
+            .ok_or("this is an access for state not for cells")?;
+        let (target_sparse, target_dense) = self
+            .table
+            .get_mut(&type_id::<C>())
+            .ok_or("type not in table")?;
+        if sparse_index == 0 || sparse_index >= target_sparse.cap {
+            return Err("invalid sparse index");
+        }
+        if target_sparse.as_gen_slice()[sparse_index] != access.gen {
+            return Err("invalid generation");
+        }
+        match target_sparse.as_slice()[sparse_index] {
+            0 => Err("sparse index at this type column is empty"),
+            _ => {
+                let dense_index = target_sparse.as_slice()[sparse_index] & MASK_TAIL;
+                target_sparse.as_slice()[sparse_index] = 0;
+                self.helpers[1].as_slice()[sparse_index] -= 1;
+                if self.helpers[1].as_slice()[sparse_index] == 0 && sparse_index < self.freehead {
+                    self.freehead = sparse_index;
+                }
+                // last element
+                let value = if dense_index == target_dense.len - 1 {
+                    target_dense.pop()
+                } else {
+                    let val = target_dense.swap_remove::<C>(dense_index);
+                    let sparse_index_to_change = target_dense.as_sparse_slice()[dense_index];
+                    target_sparse.as_slice()[sparse_index_to_change] = dense_index | MASK_HEAD;
+                    val
+                };
+                Ok(value)
+            }
         }
     }
 
-    unsafe fn read_raw<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> &mut C {
-        let (sparse_column, dense_column) = self.table.get(&type_id::<C>()).unwrap();
-        &mut dense_column.as_slice::<C>()[sparse_column.as_slice()[sparse_index] & MASK_TAIL]
-    }
+    // for rn we'll keep the read from sparse index function
+    // pub fn read<C: 'static + Sized>(
+    //     &self,
+    //     sparse_index: SparseIndex,
+    // ) -> Result<Access<C>, &'static str> {
+    //     match self.table.get(&type_id::<C>()) {
+    //         Some((sparse_column, dense_column)) => {
+    //             if sparse_index == 0
+    //                 || sparse_index >= sparse_column.cap
+    //                 || sparse_column.as_slice()[sparse_index] == 0
+    //             {
+    //                 return Err("invalid sparse index");
+    //             }
+    //             let gen = sparse_column.as_gen_slice()[sparse_index];
+    //             Ok(Access::new(self, AccessType::Cell(sparse_index), gen))
+    //         }
+    //         None => Err("type not in column"),
+    //     }
+    // }
 
+    // states don't have generations
     pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<Access<C>, &'static str> {
-        if let Some(_) = self.states.get(&type_id::<C>()) {
+        if let Some(state) = self.states.get(&type_id::<C>()) {
             Err("state already present in table")
         } else {
             self.states.insert(type_id::<C>(), State::new::<C>(res));
-            Ok(Access::new(self, AccessType::State))
+            Ok(Access::new(self, AccessType::State, !0))
         }
     }
-
-    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
+    pub fn read_current_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
         if let Some(res) = self.states.get(&type_id::<C>()) {
-            Ok(Access::new(self, AccessType::State))
+            Ok(Access::new(self, AccessType::State, !0))
         } else {
-            Err("state not in table")
+            Err("state never registered")
+        }
+    }
+    pub fn remove_state<C: 'static + Sized>(&mut self) -> Result<C, &'static str> {
+        if let Some(state) = self.states.remove(&type_id::<C>()) {
+            unsafe {
+                let mut value: MaybeUninit<C> = MaybeUninit::uninit();
+                copy::<C>(
+                    (state.ptr as *mut C).as_mut().unwrap(),
+                    value.as_mut_ptr(),
+                    1,
+                );
+                Ok(value.assume_init())
+            }
+        } else {
+            Err("state not registered")
         }
     }
 
+    unsafe fn read_raw<C: 'static + Sized>(
+        &self,
+        sparse_index: SparseIndex,
+        gen: Generation,
+    ) -> &mut C {
+        let (sparse_column, dense_column) = self.table.get(&type_id::<C>()).unwrap();
+        if sparse_column.as_gen_slice()[sparse_index] != gen {
+            panic!("generation not matching")
+        }
+        &mut dense_column.as_slice::<C>()[sparse_column.as_slice()[sparse_index] & MASK_TAIL]
+    }
     unsafe fn read_state_raw<C: 'static + Sized>(&self) -> &mut C {
         (self.states.get(&type_id::<C>()).unwrap().ptr as *mut C)
             .cast::<C>()
             .as_mut()
             .unwrap()
-    }
-
-    pub fn remove_state<C: 'static + Sized>(&mut self) -> Result<C, &'static str> {
-        if let Some(res) = self.states.remove(&type_id::<C>()) {
-            unsafe {
-                let mut value: MaybeUninit<C> = MaybeUninit::uninit();
-                copy::<C>((res.ptr as *mut C).as_mut().unwrap(), value.as_mut_ptr(), 1);
-                // then it gets dropped but in a type erased way, which means that it can't call the destructor of that type
-                // but rather just drop the portion originally on the stack
-                drop(res);
-                Ok(value.assume_init())
-            }
-        } else {
-            Err("state not in table")
-        }
     }
 
     pub fn load() {
@@ -734,14 +780,16 @@ pub struct Access<C: 'static + Sized> {
     _phantom: PhantomData<C>,
     table: *const Table,
     ty: AccessType,
-    // todo generational indices
+    // todo might not need generations to use state??
+    gen: Generation,
 }
 impl<C: 'static + Sized> Access<C> {
-    fn new(table: *const Table, ty: AccessType) -> Self {
+    fn new(table: *const Table, ty: AccessType, gen: Generation) -> Self {
         Self {
             _phantom: PhantomData,
             table,
             ty,
+            gen,
         }
     }
 
@@ -756,7 +804,9 @@ impl<C: 'static + Sized> Deref for Access<C> {
     type Target = C;
     fn deref(&self) -> &Self::Target {
         match self.ty {
-            AccessType::Cell(sparse_index) => unsafe { (*self.table).read_raw::<C>(sparse_index) },
+            AccessType::Cell(sparse_index) => unsafe {
+                (*self.table).read_raw::<C>(sparse_index, self.gen)
+            },
             AccessType::State => unsafe { (*self.table).read_state_raw::<C>() },
         }
     }
@@ -764,7 +814,9 @@ impl<C: 'static + Sized> Deref for Access<C> {
 impl<C: 'static + Sized> DerefMut for Access<C> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self.ty {
-            AccessType::Cell(sparse_index) => unsafe { (*self.table).read_raw::<C>(sparse_index) },
+            AccessType::Cell(sparse_index) => unsafe {
+                (*self.table).read_raw::<C>(sparse_index, self.gen)
+            },
             AccessType::State => unsafe { (*self.table).read_state_raw::<C>() },
         }
     }
@@ -852,82 +904,37 @@ mod test {
 
     #[derive(Debug)]
     struct Thing(usize);
+    impl Drop for Thing {
+        fn drop(&mut self) {
+            println!("uwu dropped")
+        }
+    }
 
     #[test]
     fn test() {
         let mut table = Table::new();
+        table.add_state(Thing(9999)).unwrap();
+        table.remove_state::<Thing>().unwrap();
+        // let mut access = table.insert_new(Thing(19910));
+        // access.gen += 1;
+        // table.remove(access).unwrap();
 
-        let mut access = table.add_state(Thing(1)).unwrap();
-
-        for each in 0..10 {
-            access.0 *= 2;
-        }
-
-        println!("{:?}", *access);
-
-        let mut access = table.insert_new(Thing(9922));
-        println!("{:?}", *access);
-
-        // for each in 0..10 {
-        //     let (index, _) = table.insert_new(vec![12]);
-        //     assert!(each + 1 == index);
+        // let mut vec: Vec<Access<Thing>> = vec![];
+        // for each in 0..63 {
+        //     vec.push(table.insert_new(Thing(each)));
         // }
-        // for each in 0..100000 {
-        //     table.insert_new(Thing(each + 1));
+        // for each in vec {
+        //     table.remove(each).unwrap();
         // }
 
-        // for each in 1..100000 {
-        //     let val = table.remove::<Thing>(each).unwrap();
-        //     assert_eq!(val.0, each);
-        // }
-
-        // let mut thing = 0;
-
-        // let another = &mut thing;
-
-        // let anooother = &mut thing;
-        // println!("{:?}", &thing);
-        // *another += 1;
-
-        // for each in 1..=10 {
-        //     println!(
-        //         "{:?}",
-        //         table
-        //             .table
-        //             .get(&type_id::<Thing>())
-        //             .unwrap()
-        //             .1
-        //             .as_sparse_slice()
-        //     );
-        //     println!(
-        //         "{:?}",
-        //         table
-        //             .table
-        //             .get(&type_id::<Thing>())
-        //             .unwrap()
-        //             .1
-        //             .as_slice::<Thing>()
-        //     );
-        //     table.remove::<Thing>(each).unwrap();
-        // }
-
-        // let uwu = NoticeOnDrop {
-        //     str: "1".to_string(),
-        // };
-        // let another_uwu = NoticeOnDrop {
-        //     str: "2".to_string(),
-        // };
-        // let index = table.insert_new(uwu);
-        // println!("{:?}")
-        // println!("{:?}", &table.remove::<NoticeOnDrop>(index).unwrap());
-
-        // table.read_column::<NoticeOnDrop>().unwrap()[0] = another_uwu;
-        // println!("{:?}", &table.read_column::<NoticeOnDrop>().unwrap()[..]);
-
-        // table.add_state(uwu).unwrap();
-        // *table.read_state::<NoticeOnDrop>().unwrap() = another_uwu;
-        // println!("{:?}", &table.remove_state::<NoticeOnDrop>().unwrap());
-        // table.read_state::<NoticeOnDrop>().unwrap();
-        // forget(uwu);
+        // println!(
+        //     "{:?}",
+        //     table
+        //         .table
+        //         .get(&type_id::<Thing>())
+        //         .unwrap()
+        //         .0
+        //         .as_gen_slice()
+        // );
     }
 }
