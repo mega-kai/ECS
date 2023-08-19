@@ -15,7 +15,6 @@
     const_mut_refs,
     const_type_name,
     portable_simd,
-    array_zip,
     slice_as_chunks,
     pointer_is_aligned
 )]
@@ -36,7 +35,7 @@ use std::{alloc::Layout, fmt::Debug};
 type SparseIndex = usize;
 type DenseIndex = usize;
 type BufferIndex = usize;
-type TypeId = u64;
+type TypeId = u128;
 type Generation = usize;
 
 const MASK_HEAD: usize = 1 << (usize::BITS - 1);
