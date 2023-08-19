@@ -5,19 +5,7 @@
     unused_mut,
     unused_assignments
 )]
-#![feature(
-    alloc_layout_extra,
-    allocator_api,
-    map_try_insert,
-    core_intrinsics,
-    const_trait_impl,
-    const_type_id,
-    const_mut_refs,
-    const_type_name,
-    portable_simd,
-    slice_as_chunks,
-    pointer_is_aligned
-)]
+#![feature(alloc_layout_extra, core_intrinsics, const_type_id, portable_simd)]
 
 use core::panic;
 use std::alloc::{alloc, dealloc, realloc};
