@@ -4,17 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wasm-bindgen = "0.2.87"
-# serde = { version = "1.0.163", features = ["derive"] }
-# hashbrown = "0.13.2"
+# wasm-bindgen = "0.2.87"
 [lib]
 crate-type = ["cdylib"]
 
 
-[profile.release]
-opt-level = 'z'
-lto = true
-panic = "abort"
-strip = true
-# no parallel codegen units
-codegen-units = 1
+# [profile.release]
+# opt-level = 'z'
+# lto = true
+# panic = "abort"
+# strip = true
+# # no parallel codegen units
+# codegen-units = 1

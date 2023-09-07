@@ -6,7 +6,14 @@
     unused_assignments
 )]
 #![feature(alloc_layout_extra, core_intrinsics, const_type_id, portable_simd)]
-//
+
+// todo, the idea of inheritance with components, a more specialized form of a component taking up a more
+// "general" component in its place
+
+// todo, load/save a single column, then reassemble into a whole table.
+
+// todo, make all the api multithread safe???
+
 use core::panic;
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
@@ -19,7 +26,6 @@ use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{alloc::Layout, fmt::Debug};
 
-//-----------------STORAGE-----------------//
 type SparseIndex = usize;
 type DenseIndex = usize;
 type BufferIndex = usize;
@@ -38,7 +44,6 @@ const SIMD_START: Simd<usize, 64> = Simd::from_array([
 const SHIFT: Simd<usize, 64> = Simd::from_array([63; 64]);
 const ONE: Simd<usize, 64> = Simd::from_array([1; 64]);
 
-//-----------------FILTER-----------------//
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Operation {
     And,
@@ -199,7 +204,7 @@ struct Column {
     gen_ptr: *mut u8,
 }
 impl Column {
-    /// it is guranteed that the column would be zeroed and can be diveded whole by 64
+    /// it is guranteed that the column would be zeroed and can be diveded by 64
     fn new(size: usize) -> Self {
         assert!(size % 64 == 0);
         let result = Self {
@@ -614,7 +619,7 @@ impl Table {
             .table
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
-        let (dense_index, ptr) = targe_dense.push(value, sparse_index);
+        let (dense_index, _) = targe_dense.push(value, sparse_index);
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
         // update generation
         target_sparse.as_gen_slice()[sparse_index] += 1;
@@ -635,7 +640,7 @@ impl Table {
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
         match target_sparse.as_slice()[sparse_index] {
             0 => {
-                let (dense_index, ptr) = target_dense.push(value, sparse_index);
+                let (dense_index, _) = target_dense.push(value, sparse_index);
                 target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
                 target_sparse.as_gen_slice()[sparse_index] += 1;
                 let gen = target_sparse.as_gen_slice()[sparse_index];
@@ -685,7 +690,7 @@ impl Table {
 
     // states don't have generations
     pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<Access<C>, &'static str> {
-        if let Some(state) = self.states.get(&type_id::<C>()) {
+        if let Some(_) = self.states.get(&type_id::<C>()) {
             Err("state already present in table")
         } else {
             self.states.insert(type_id::<C>(), State::new::<C>(res));
@@ -693,7 +698,7 @@ impl Table {
         }
     }
     pub fn read_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
-        if let Some(res) = self.states.get(&type_id::<C>()) {
+        if let Some(_) = self.states.get(&type_id::<C>()) {
             Ok(Access::new(self, AccessType::State, !0))
         } else {
             Err("state never registered")
@@ -733,10 +738,10 @@ impl Table {
             .unwrap()
     }
 
-    pub fn load() {
+    pub fn load_column() {
         todo!()
     }
-    pub fn save() {
+    pub fn save_column() {
         todo!()
     }
 }
