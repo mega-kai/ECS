@@ -7,12 +7,8 @@
 )]
 #![feature(alloc_layout_extra, core_intrinsics, const_type_id, portable_simd)]
 
-// todo, the idea of inheritance with components, a more specialized form of a component taking up a more
-// "general" component in its place
-
 // todo, load/save a single column, then reassemble into a whole table.
-
-// todo, make all the api multithread safe???
+// todo, thread safety
 
 use core::panic;
 use std::alloc::{alloc, dealloc, realloc};
@@ -277,6 +273,9 @@ impl Drop for Column {
     }
 }
 
+struct ZST(u8);
+const ZST_LAYOUT: Layout = Layout::new::<ZST>();
+
 struct DenseColumn {
     ptr: *mut u8,
     sparse_ptr: *mut u8,
@@ -285,16 +284,28 @@ struct DenseColumn {
     layout: Layout,
 }
 impl DenseColumn {
-    // this is where the major jankness is at
+    // todo, handle zero sized types by have it take up one byte
     fn new<C: 'static + Sized>() -> Self {
         let layout = Layout::new::<C>();
-        unsafe {
-            Self {
-                ptr: alloc(layout.repeat(4).unwrap().0),
-                sparse_ptr: alloc(Layout::new::<usize>().repeat(4).unwrap().0),
-                len: 0,
-                cap: 4,
-                layout,
+        if layout.size() > 0 {
+            unsafe {
+                Self {
+                    ptr: alloc(layout.repeat(4).unwrap().0),
+                    sparse_ptr: alloc(Layout::new::<usize>().repeat(4).unwrap().0),
+                    len: 0,
+                    cap: 4,
+                    layout,
+                }
+            }
+        } else {
+            unsafe {
+                Self {
+                    ptr: alloc(ZST_LAYOUT.repeat(4).unwrap().0),
+                    sparse_ptr: alloc(Layout::new::<usize>().repeat(4).unwrap().0),
+                    len: 0,
+                    cap: 4,
+                    layout: ZST_LAYOUT,
+                }
             }
         }
     }
@@ -327,7 +338,6 @@ impl DenseColumn {
             self.sparse_ptr = ptr_sparse;
         }
         self.cap *= 2;
-        // println!("success")
     }
 
     /// returns a "naive" dense index, also super dangerous
@@ -342,10 +352,13 @@ impl DenseColumn {
         let dense_index = self.len;
         self.len += 1;
         self.as_sparse_slice()[dense_index] = sparse_index;
-        // todo why not just use ptr.add() + move
         unsafe {
-            copy(&value, &mut self.as_slice::<C>()[dense_index], 1);
-            forget(value);
+            if self.layout == ZST_LAYOUT {
+                copy(&ZST(0u8), &mut self.as_slice::<ZST>()[dense_index], 1);
+            } else {
+                copy(&value, &mut self.as_slice::<C>()[dense_index], 1);
+                forget(value);
+            }
         }
         (dense_index, &mut self.as_slice::<C>()[dense_index])
     }
@@ -353,37 +366,44 @@ impl DenseColumn {
     fn pop<C: 'static + Sized>(&mut self) -> C {
         unsafe {
             let mut value: MaybeUninit<C> = MaybeUninit::uninit();
-            copy::<C>(self.as_slice::<C>().last().unwrap(), value.as_mut_ptr(), 1);
+            if self.layout != ZST_LAYOUT {
+                copy::<C>(self.as_slice::<C>().last().unwrap(), value.as_mut_ptr(), 1);
+            }
             self.len -= 1;
-            // *self.as_slice::<C>().last().unwrap()
-            // *(self.ptr as *mut C).add(self.len + 1)
             value.assume_init()
         }
     }
 
+    // don't think this is zst safe yet
     fn swap_remove<C: 'static + Sized>(&mut self, dense_index: DenseIndex) -> C {
         unsafe {
             let mut value: MaybeUninit<C> = MaybeUninit::uninit();
-            copy::<C>(
-                &mut self.as_slice::<C>()[dense_index],
-                value.as_mut_ptr(),
-                1,
-            );
-            copy::<C>(
-                self.as_slice::<C>().last().unwrap(),
-                &mut self.as_slice::<C>()[dense_index],
-                1,
-            );
+            if self.layout != ZST_LAYOUT {
+                copy::<C>(
+                    &mut self.as_slice::<C>()[dense_index],
+                    value.as_mut_ptr(),
+                    1,
+                );
+                copy::<C>(
+                    self.as_slice::<C>().last().unwrap(),
+                    &mut self.as_slice::<C>()[dense_index],
+                    1,
+                );
+            }
             self.as_sparse_slice()[dense_index] = *self.as_sparse_slice().last().unwrap();
             self.len -= 1;
             value.assume_init()
         }
     }
 
-    // omg this is wildly unsafe
+    /// omg this is wildly unsafe, note that slicing into a zst would only yield a slice of 0u8s
     fn as_slice<'a, 'b, C: 'static + Sized>(&'a self) -> &'b mut [C] {
-        assert!(Layout::new::<C>() == self.layout);
-        unsafe { from_raw_parts_mut(self.ptr as *mut C, self.len) }
+        let layout = Layout::new::<C>();
+        if layout == self.layout || layout.size() == 0 {
+            unsafe { from_raw_parts_mut(self.ptr as *mut C, self.len) }
+        } else {
+            panic!("type not matching")
+        }
     }
 
     fn as_sparse_slice(&self) -> &mut [usize] {
@@ -421,7 +441,6 @@ impl State {
 
 impl Drop for State {
     fn drop(&mut self) {
-        // println!("state dropped uwu");
         unsafe { dealloc(self.ptr, self.layout) }
     }
 }
@@ -577,6 +596,7 @@ impl Table {
         }
     }
 
+    /// if u want to init a column with nothing in it
     pub fn register_column<C: 'static + Sized>(&mut self) {
         let cap = self.cap();
         self.table
@@ -615,10 +635,12 @@ impl Table {
             self.freehead = self.cap() / 2;
         }
         let cap = self.cap();
+
         let (target_sparse, targe_dense) = self
             .table
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
+
         let (dense_index, _) = targe_dense.push(value, sparse_index);
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
         // update generation
@@ -688,7 +710,7 @@ impl Table {
         }
     }
 
-    // states don't have generations
+    // states don't have generations; this is based on hashmap so it actually supports zst states
     pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<Access<C>, &'static str> {
         if let Some(_) = self.states.get(&type_id::<C>()) {
             Err("state already present in table")
@@ -738,10 +760,10 @@ impl Table {
             .unwrap()
     }
 
-    pub fn load_column() {
+    pub fn load_column<C: 'static + Sized>() {
         todo!()
     }
-    pub fn save_column() {
+    pub fn save_column<C: 'static + Sized>() {
         todo!()
     }
 }
@@ -750,6 +772,7 @@ enum AccessType {
     State,
     Cell(SparseIndex),
 }
+// why did i use access in the first place????
 pub struct Access<C: 'static + Sized> {
     _phantom: PhantomData<C>,
     table: *const Table,
@@ -882,12 +905,21 @@ mod test {
             println!("uwu dropped")
         }
     }
-
+    struct DUMMY {}
     #[test]
     fn test() {
         let mut table = Table::new();
-        table.add_state(Thing(9999)).unwrap();
-        table.remove_state::<Thing>().unwrap();
+        let acc = table.insert_new(DUMMY {});
+        let alt_acc = table.insert_new(DUMMY {});
+        table.insert_new(DUMMY {});
+        table.insert_new(DUMMY {});
+        table.insert_new(DUMMY {});
+
+        table.remove(acc).unwrap();
+        table.remove(alt_acc).unwrap();
+
+        // table.add_state(Thing(9999)).unwrap();
+        // table.remove_state::<Thing>().unwrap();
         // let mut access = table.insert_new(Thing(19910));
         // access.gen += 1;
         // table.remove(access).unwrap();
