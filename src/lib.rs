@@ -7,7 +7,6 @@
 )]
 #![feature(alloc_layout_extra, core_intrinsics, const_type_id, portable_simd)]
 
-// todo, load/save a single column, then reassemble into a whole table.
 // todo, thread safety
 
 use core::panic;
@@ -284,7 +283,6 @@ struct DenseColumn {
     layout: Layout,
 }
 impl DenseColumn {
-    // todo, handle zero sized types by have it take up one byte
     fn new<C: 'static + Sized>() -> Self {
         let layout = Layout::new::<C>();
         if layout.size() > 0 {
@@ -603,19 +601,7 @@ impl Table {
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
-    pub fn query_column(&mut self, filter: &Filter) -> IterMut {
-        let result_index = self.filter_traverse(0, filter);
-        let result_buffer_simd = self.helpers[result_index].as_simd();
-        let sparse_simd = self.helpers[0].as_simd();
-        for each in 0..self.cap() / 64 {
-            result_buffer_simd[each] =
-                !((result_buffer_simd[each] >> SHIFT) - ONE) & sparse_simd[each];
-        }
-        let result_buffer_slice = self.helpers[result_index].as_slice(); // [..largest_occupied_sparse_index]
-        result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
-        IterMut::new(result_buffer_slice.as_ptr_range())
-    }
-    pub unsafe fn read_column<C: 'static + Sized>(&self) -> Result<&[C], &'static str> {
+    pub unsafe fn read_column_raw<C: 'static + Sized>(&self) -> Result<&[C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((_, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
@@ -760,6 +746,25 @@ impl Table {
             .unwrap()
     }
 
+    // todo intermediate product, can yield IterMut or can be further queried by each method
+    pub fn query_with_filter(&mut self, filter: &Filter) -> IterMut {
+        let result_index = self.filter_traverse(0, filter);
+        let result_buffer_simd = self.helpers[result_index].as_simd();
+        let sparse_simd = self.helpers[0].as_simd();
+        for each in 0..self.cap() / 64 {
+            result_buffer_simd[each] =
+                !((result_buffer_simd[each] >> SHIFT) - ONE) & sparse_simd[each];
+        }
+        let result_buffer_slice = self.helpers[result_index].as_slice(); // [..largest_occupied_sparse_index]
+        result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
+        IterMut::new(result_buffer_slice.as_ptr_range())
+    }
+    pub fn query_with_trait() {
+        todo!()
+    }
+
+    // todo, load/save a single column, then reassemble into a whole table.
+    // what if we use a savable trait that has a method to save/load stuff
     pub fn load_column<C: 'static + Sized>() {
         todo!()
     }
@@ -886,60 +891,8 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    // use super::*;
 
-    #[derive(Debug)]
-    struct NoticeOnDrop {
-        str: String,
-    }
-    impl Drop for NoticeOnDrop {
-        fn drop(&mut self) {
-            println!("uwu dropped {:?}", self.str);
-        }
-    }
-
-    #[derive(Debug)]
-    struct Thing(usize);
-    impl Drop for Thing {
-        fn drop(&mut self) {
-            println!("uwu dropped")
-        }
-    }
-    struct DUMMY {}
     #[test]
-    fn test() {
-        let mut table = Table::new();
-        let acc = table.insert_new(DUMMY {});
-        let alt_acc = table.insert_new(DUMMY {});
-        table.insert_new(DUMMY {});
-        table.insert_new(DUMMY {});
-        table.insert_new(DUMMY {});
-
-        table.remove(acc).unwrap();
-        table.remove(alt_acc).unwrap();
-
-        // table.add_state(Thing(9999)).unwrap();
-        // table.remove_state::<Thing>().unwrap();
-        // let mut access = table.insert_new(Thing(19910));
-        // access.gen += 1;
-        // table.remove(access).unwrap();
-
-        // let mut vec: Vec<Access<Thing>> = vec![];
-        // for each in 0..63 {
-        //     vec.push(table.insert_new(Thing(each)));
-        // }
-        // for each in vec {
-        //     table.remove(each).unwrap();
-        // }
-
-        // println!(
-        //     "{:?}",
-        //     table
-        //         .table
-        //         .get(&type_id::<Thing>())
-        //         .unwrap()
-        //         .0
-        //         .as_gen_slice()
-        // );
-    }
+    fn test() {}
 }
