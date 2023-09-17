@@ -5,7 +5,7 @@
     unused_mut,
     unused_assignments
 )]
-#![feature(alloc_layout_extra, core_intrinsics, const_type_id, portable_simd)]
+#![feature(alloc_layout_extra, core_intrinsics, portable_simd)]
 
 // todo, thread safety
 
@@ -73,7 +73,7 @@ pub struct Filter {
     ids: [TypeId; NUM_OF_NODES],
 }
 impl Filter {
-    pub const fn from<C: Clone + 'static>() -> Self {
+    pub fn from<C: Clone + 'static>() -> Self {
         let mut thing = Self {
             num_of_nodes: 1,
             num_of_ids: 1,
