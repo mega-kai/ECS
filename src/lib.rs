@@ -28,7 +28,6 @@ type SparseIndex = usize;
 type DenseIndex = usize;
 type BufferIndex = usize;
 type TypeId = u128;
-type Generation = usize;
 
 const MASK_HEAD: usize = 1 << (usize::BITS - 1);
 const MASK_TAIL: usize = !MASK_HEAD;
@@ -67,7 +66,7 @@ impl Debug for Filter {
 }
 
 const NUM_OF_NODES: usize = 16;
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Filter {
     num_of_nodes: u8,
     num_of_ids: u8,
@@ -198,8 +197,6 @@ impl Not for Filter {
 struct Column {
     ptr: *mut u8,
     cap: usize,
-
-    gen_ptr: *mut u8,
 }
 impl Column {
     /// it is guranteed that the column would be zeroed and can be diveded by 64
@@ -207,12 +204,10 @@ impl Column {
         assert!(size % 64 == 0);
         let result = Self {
             ptr: unsafe { alloc(Layout::new::<usize>().repeat(size).unwrap().0) },
-            gen_ptr: unsafe { alloc(Layout::new::<usize>().repeat(size).unwrap().0) },
             cap: size,
         };
 
         result.as_simd().fill(Simd::splat(0));
-        result.as_gen_simd().fill(Simd::splat(0));
         result
     }
 
@@ -231,25 +226,10 @@ impl Column {
                 panic!("nullptr")
             }
             self.ptr = ptr;
-
-            let gen_ptr = realloc(
-                self.gen_ptr,
-                Layout::new::<usize>().repeat(self.cap).unwrap().0,
-                Layout::new::<usize>()
-                    .repeat(self.cap * 2)
-                    .unwrap()
-                    .0
-                    .size(),
-            );
-            if gen_ptr.is_null() {
-                panic!("nullptr")
-            }
-            self.gen_ptr = gen_ptr;
         };
 
         self.cap *= 2;
         self.as_simd()[self.cap / (64 * 2)..].fill(Simd::splat(0));
-        self.as_gen_simd()[self.cap / (64 * 2)..].fill(Simd::splat(0));
     }
 
     fn as_slice(&self) -> &mut [usize] {
@@ -259,14 +239,6 @@ impl Column {
     // this is also very very dangerous
     fn as_simd<'a, 'b>(&'a self) -> &'b mut [Simd<usize, 64>] {
         unsafe { from_raw_parts_mut(self.ptr as *mut Simd<usize, 64>, self.cap / 64) }
-    }
-
-    fn as_gen_slice(&self) -> &mut [Generation] {
-        unsafe { from_raw_parts_mut(self.gen_ptr as *mut usize, self.cap) }
-    }
-
-    fn as_gen_simd<'a, 'b>(&'a self) -> &'b mut [Simd<Generation, 64>] {
-        unsafe { from_raw_parts_mut(self.gen_ptr as *mut Simd<usize, 64>, self.cap / 64) }
     }
 }
 impl Drop for Column {
@@ -614,7 +586,7 @@ impl Table {
         }
     }
 
-    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
+    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> SparseIndex {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
             if self.helpers[1].as_slice()[each] == 0 {
@@ -635,18 +607,15 @@ impl Table {
 
         let (dense_index, _) = targe_dense.push(value, sparse_index);
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
-        // update generation
-        target_sparse.as_gen_slice()[sparse_index] += 1;
-        let gen = target_sparse.as_gen_slice()[sparse_index];
         targe_dense.as_sparse_slice()[dense_index] = sparse_index;
         self.helpers[1].as_slice()[sparse_index] += 1;
-        Access::new(self, AccessType::Cell(sparse_index), gen)
+        sparse_index
     }
     pub fn insert_at<C: 'static + Sized>(
         &mut self,
         sparse_index: SparseIndex,
         value: C,
-    ) -> Result<Access<C>, &'static str> {
+    ) -> Result<SparseIndex, &'static str> {
         let cap = self.cap();
         let (target_sparse, target_dense) = self
             .table
@@ -656,19 +625,18 @@ impl Table {
             0 => {
                 let (dense_index, _) = target_dense.push(value, sparse_index);
                 target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
-                target_sparse.as_gen_slice()[sparse_index] += 1;
-                let gen = target_sparse.as_gen_slice()[sparse_index];
+
                 target_dense.as_sparse_slice()[dense_index] = sparse_index;
                 self.helpers[1].as_slice()[sparse_index] += 1;
-                Ok(Access::new(self, AccessType::Cell(sparse_index), gen))
+                Ok(sparse_index)
             }
             _ => Err("sparse index at this type column is already taken"),
         }
     }
-    pub fn remove<C: 'static + Sized>(&mut self, access: Access<C>) -> Result<C, &'static str> {
-        let sparse_index = access
-            .get_sparse_index()
-            .ok_or("this is an access for state not for cells")?;
+    pub fn remove<C: 'static + Sized>(
+        &mut self,
+        sparse_index: SparseIndex,
+    ) -> Result<C, &'static str> {
         let (target_sparse, target_dense) = self
             .table
             .get_mut(&type_id::<C>())
@@ -676,9 +644,7 @@ impl Table {
         if sparse_index == 0 || sparse_index >= target_sparse.cap {
             return Err("invalid sparse index");
         }
-        if target_sparse.as_gen_slice()[sparse_index] != access.gen {
-            return Err("invalid generation");
-        }
+
         match target_sparse.as_slice()[sparse_index] {
             0 => Err("sparse index at this type column is empty"),
             _ => {
@@ -703,17 +669,17 @@ impl Table {
     }
 
     // states don't have generations; this is based on hashmap so it actually supports zst states
-    pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<Access<C>, &'static str> {
+    pub fn add_state<C: 'static + Sized>(&mut self, res: C) -> Result<(), &'static str> {
         if let Some(_) = self.states.get(&type_id::<C>()) {
             Err("state already present in table")
         } else {
             self.states.insert(type_id::<C>(), State::new::<C>(res));
-            Ok(Access::new(self, AccessType::State, !0))
+            Ok(())
         }
     }
-    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<Access<C>, &'static str> {
-        if let Some(_) = self.states.get(&type_id::<C>()) {
-            Ok(Access::new(self, AccessType::State, !0))
+    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<&mut C, &'static str> {
+        if let Some(state) = self.states.get_mut(&type_id::<C>()) {
+            Ok(unsafe { state.ptr.cast::<C>().as_mut().unwrap() })
         } else {
             Err("state never registered")
         }
@@ -734,27 +700,14 @@ impl Table {
         }
     }
 
-    unsafe fn read_raw<C: 'static + Sized>(
-        &self,
-        sparse_index: SparseIndex,
-        gen: Generation,
-    ) -> &mut C {
+    pub fn read<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> &mut C {
         let (sparse_column, dense_column) = self.table.get(&type_id::<C>()).unwrap();
-        if sparse_column.as_gen_slice()[sparse_index] != gen {
-            panic!("generation not matching")
-        }
         &mut dense_column.as_slice::<C>()[sparse_column.as_slice()[sparse_index] & MASK_TAIL]
-    }
-    unsafe fn read_state_raw<C: 'static + Sized>(&self) -> &mut C {
-        (self.states.get(&type_id::<C>()).unwrap().ptr as *mut C)
-            .cast::<C>()
-            .as_mut()
-            .unwrap()
     }
 
     // todo intermediate product, can yield IterMut or can be further queried by each method
-    pub fn query_with_filter(&mut self, filter: &Filter) -> IterMut {
-        let result_index = self.filter_traverse(0, filter);
+    pub fn query_with_filter(&mut self, filter: Filter) -> IterMut {
+        let result_index = self.filter_traverse(0, &filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
         let sparse_simd = self.helpers[0].as_simd();
         for each in 0..self.cap() / 64 {
@@ -766,11 +719,6 @@ impl Table {
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
 
-    // which is unfortunately, impossible to implement, unless you can check trait for typeid
-    pub fn query_with_trait() {
-        todo!()
-    }
-
     // todo, load/save a single column, then reassemble into a whole table.
     // what if we use a savable trait that has a method to save/load stuff
     pub fn load_column<C: 'static + Sized>() {
@@ -778,66 +726,6 @@ impl Table {
     }
     pub fn save_column<C: 'static + Sized>() {
         todo!()
-    }
-}
-
-enum AccessType {
-    State,
-    Cell(SparseIndex),
-}
-// why did i use access in the first place????
-pub struct Access<C: 'static + Sized> {
-    _phantom: PhantomData<C>,
-    table: *const Table,
-    ty: AccessType,
-    gen: Generation,
-}
-impl<C: 'static + Sized> Access<C> {
-    fn new(table: *const Table, ty: AccessType, gen: Generation) -> Self {
-        Self {
-            _phantom: PhantomData,
-            table,
-            ty,
-            gen,
-        }
-    }
-
-    pub fn get_sparse_index(&self) -> Option<SparseIndex> {
-        match self.ty {
-            AccessType::Cell(index) => Some(index),
-            AccessType::State => None,
-        }
-    }
-}
-impl<C: 'static + Sized> Deref for Access<C> {
-    type Target = C;
-    fn deref(&self) -> &Self::Target {
-        match self.ty {
-            AccessType::Cell(sparse_index) => unsafe {
-                (*self.table).read_raw::<C>(sparse_index, self.gen)
-            },
-            AccessType::State => unsafe { (*self.table).read_state_raw::<C>() },
-        }
-    }
-}
-impl<C: 'static + Sized> DerefMut for Access<C> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self.ty {
-            AccessType::Cell(sparse_index) => unsafe {
-                (*self.table).read_raw::<C>(sparse_index, self.gen)
-            },
-            AccessType::State => unsafe { (*self.table).read_state_raw::<C>() },
-        }
-    }
-}
-impl<C: 'static + Sized> AsRef<C> for Access<C> {
-    fn as_ref(&self) -> &C {
-        &*self
-    }
-}
-impl<C: 'static + Sized> AsMut<C> for Access<C> {
-    fn as_mut(&mut self) -> &mut C {
-        &mut *self
     }
 }
 
@@ -901,12 +789,19 @@ impl ECS {
 mod test {
     use super::*;
 
-    // use impls::impls;
-    trait UwU {}
-    impl UwU for u32 {}
-
     #[test]
     fn test() {
-        // assert!(impls!(u32: Copy & Debug & UwU));
+        let mut table = Table::new();
+
+        for each in 0..10 {
+            let index = table.insert_new(12usize);
+            if index % 2 == 0 {
+                table.insert_at(index, 12isize).unwrap();
+            }
+        }
+
+        for each in table.query_with_filter(Filter::from::<usize>() & !Filter::from::<isize>()) {
+            println!("{:?}", each);
+        }
     }
 }
