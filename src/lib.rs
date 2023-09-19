@@ -3,13 +3,16 @@
     unused_variables,
     unreachable_code,
     unused_mut,
-    unused_assignments
+    unused_assignments,
+    unused_imports
 )]
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd)]
 
-// todo, thread safety
+// todo, thread safety, meaning all that access to anything within table shouldn't cause data race
+// preferably using atomics???
 
 use core::panic;
+// use impls::impls;
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
 use std::intrinsics::type_id;
@@ -601,7 +604,10 @@ impl Table {
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
-    pub unsafe fn read_column_raw<C: 'static + Sized>(&self) -> Result<&[C], &'static str> {
+    /// the lifetime isn't locked
+    pub unsafe fn read_column_raw<'a, 'b, C: 'static + Sized>(
+        &'a self,
+    ) -> Result<&'b [C], &'static str> {
         match self.table.get(&type_id::<C>()) {
             Some((_, dense_column)) => Ok(dense_column.as_slice()),
             None => Err("type not in table"),
@@ -759,6 +765,8 @@ impl Table {
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
         IterMut::new(result_buffer_slice.as_ptr_range())
     }
+
+    // which is unfortunately, impossible to implement, unless you can check trait for typeid
     pub fn query_with_trait() {
         todo!()
     }
@@ -891,8 +899,14 @@ impl ECS {
 
 #[cfg(test)]
 mod test {
-    // use super::*;
+    use super::*;
+
+    // use impls::impls;
+    trait UwU {}
+    impl UwU for u32 {}
 
     #[test]
-    fn test() {}
+    fn test() {
+        // assert!(impls!(u32: Copy & Debug & UwU));
+    }
 }

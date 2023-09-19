@@ -2,3 +2,6 @@
 name = "ecs"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+impls = "1.0.3"
