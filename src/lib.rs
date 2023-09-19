@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::intrinsics::type_id;
 use std::marker::PhantomData;
 use std::mem::{forget, MaybeUninit};
+use std::num::Wrapping;
 use std::ops::{BitAnd, BitOr, BitXor, Deref, DerefMut, Not, Range};
 use std::ptr::copy;
 use std::simd::Simd;
@@ -75,7 +76,7 @@ pub struct Filter {
     ids: [TypeId; NUM_OF_NODES],
 }
 impl Filter {
-    pub fn from<C: Clone + 'static>() -> Self {
+    pub fn from<C: Sized + 'static>() -> Self {
         let mut thing = Self {
             num_of_nodes: 1,
             num_of_ids: 1,
@@ -89,8 +90,31 @@ impl Filter {
     }
 
     fn combine(mut first: Self, second: Self, op: Operation) -> Self {
-        assert!(first.nodes[0].is_some() == true);
-        assert!(second.nodes[0].is_some() == true);
+        match op {
+            Operation::And => {
+                if second == Self::NULL && first == Self::NULL {
+                    return Self::NULL;
+                } else if second == Self::NULL {
+                    return first;
+                } else if first == Self::NULL {
+                    return second;
+                }
+            }
+            Operation::Or => {
+                if second == Self::NULL || first == Self::NULL {
+                    return Self::NULL;
+                }
+            }
+            Operation::Xor => {
+                if second == Self::NULL && first == Self::NULL {
+                    return Self::NULL;
+                } else if second == Self::NULL {
+                    return !first;
+                } else if first == Self::NULL {
+                    return !second;
+                }
+            }
+        }
 
         first.nodes.copy_within(0..first.num_of_nodes as usize, 1);
         first.nodes[0] = None;
@@ -155,7 +179,7 @@ impl Filter {
         first
     }
 
-    const NULL: Filter = Self {
+    pub const NULL: Filter = Self {
         num_of_nodes: 0,
         num_of_ids: 0,
         nodes: [None; NUM_OF_NODES],
@@ -423,6 +447,7 @@ pub struct Table {
     freehead: SparseIndex,
     table: HashMap<TypeId, (Column, DenseColumn)>,
     states: HashMap<TypeId, State>,
+    current_tick: Wrapping<usize>,
 }
 
 impl Table {
@@ -432,6 +457,7 @@ impl Table {
             states: HashMap::new(),
             helpers: vec![],
             freehead: 1,
+            current_tick: Wrapping(0),
         };
 
         for _ in 0..10 {
@@ -700,13 +726,17 @@ impl Table {
         }
     }
 
-    pub fn read<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> &mut C {
+    /// only for IterMut
+    unsafe fn read_raw<'a, 'b, C: 'static + Sized>(
+        &'a self,
+        sparse_index: SparseIndex,
+    ) -> &'b mut C {
         let (sparse_column, dense_column) = self.table.get(&type_id::<C>()).unwrap();
         &mut dense_column.as_slice::<C>()[sparse_column.as_slice()[sparse_index] & MASK_TAIL]
     }
 
-    // todo intermediate product, can yield IterMut or can be further queried by each method
-    pub fn query_with_filter(&mut self, filter: Filter) -> IterMut {
+    pub fn query_with_filter<C: 'static + Sized>(&mut self, filter: Filter) -> IterMut<C> {
+        let filter = Filter::from::<C>() & filter;
         let result_index = self.filter_traverse(0, &filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
         let sparse_simd = self.helpers[0].as_simd();
@@ -716,7 +746,11 @@ impl Table {
         }
         let result_buffer_slice = self.helpers[result_index].as_slice(); // [..largest_occupied_sparse_index]
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
-        IterMut::new(result_buffer_slice.as_ptr_range())
+        IterMut::new(
+            result_buffer_slice.as_mut_ptr_range(),
+            &self,
+            self.current_tick,
+        )
     }
 
     // todo, load/save a single column, then reassemble into a whole table.
@@ -729,11 +763,22 @@ impl Table {
     }
 }
 
-pub struct IterMut {
-    ptr: *const usize,
-    end: *const usize,
+// todo consider make this type safer, it currently allows you to save it after adding/removing stuff in
+// the respective column, you can also somehow preserve it to the next tick and it still derefs
+// so maybe add marker for each tick and after each change is done to the respective column,
+// that way you can even make this copy, provided that all changing are from the api that would update these
+// indices
+pub struct IterMut<'a, C: 'static + Sized> {
+    ptr: *mut usize,
+    end: *mut usize,
+    tick_index: Wrapping<usize>,
+    op_index: Wrapping<usize>,
+
+    table: *const Table,
+
+    _phan: PhantomData<&'a C>,
 }
-impl Debug for IterMut {
+impl<'a, C: 'static + Sized> Debug for IterMut<'a, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let slice = unsafe { from_raw_parts(self.ptr, self.end.offset_from(self.ptr) as usize) };
         f.debug_struct("IterMutAlt")
@@ -741,25 +786,36 @@ impl Debug for IterMut {
             .finish()
     }
 }
-impl IterMut {
-    fn new(range: Range<*const usize>) -> Self {
+impl<'a, C: 'static + Sized> IterMut<'a, C> {
+    fn new(range: Range<*mut usize>, table: &Table, tick_index: Wrapping<usize>) -> Self {
         Self {
             ptr: range.start,
             end: range.end,
+            tick_index,
+            op_index: Wrapping(0),
+            table,
+            _phan: PhantomData,
         }
     }
 }
-impl Iterator for IterMut {
-    type Item = SparseIndex;
+impl<'a, C: 'static + Sized> Iterator for IterMut<'a, C> {
+    type Item = &'a mut C;
+    // type Item = SparseIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
+            if self.tick_index != (*self.table).current_tick {
+                return None;
+            }
             if self.ptr != self.end && *self.ptr != 0 {
                 let index = *self.ptr;
                 self.ptr = self.ptr.add(1);
-                Some(index)
+
+                let thing = (*self.table).read_raw::<C>(index);
+                return Some(thing);
+                // return Some(index);
             } else {
-                None
+                return None;
             }
         }
     }
@@ -782,6 +838,7 @@ impl ECS {
     pub fn tick(&mut self) {
         (self.entry_point)(&mut self.table);
         self.table.free_all_buffers();
+        self.table.current_tick += 1;
     }
 }
 
@@ -791,17 +848,16 @@ mod test {
 
     #[test]
     fn test() {
-        let mut table = Table::new();
+        let mut ecs = ECS::new(|table: &mut Table| {});
+        let mut table = &mut ecs.table;
 
-        for each in 0..10 {
-            let index = table.insert_new(12usize);
+        for each in 1..11 {
+            let index = table.insert_new::<usize>(each);
             if index % 2 == 0 {
-                table.insert_at(index, 12isize).unwrap();
+                table.insert_at::<isize>(index, (each) as isize).unwrap();
             }
         }
 
-        for each in table.query_with_filter(Filter::from::<usize>() & !Filter::from::<isize>()) {
-            println!("{:?}", each);
-        }
+        let mut thing = table.query_with_filter::<usize>(Filter::NULL);
     }
 }
