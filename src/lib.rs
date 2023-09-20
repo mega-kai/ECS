@@ -11,8 +11,8 @@
 // todo, thread safety, meaning all that access to anything within table shouldn't cause data race
 // preferably using atomics???
 
-use core::panic;
-// use impls::impls;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
 use std::intrinsics::type_id;
@@ -222,6 +222,7 @@ struct Column {
     ptr: *mut u8,
     cap: usize,
 }
+
 impl Column {
     /// it is guranteed that the column would be zeroed and can be diveded by 64
     fn new(size: usize) -> Self {
@@ -443,6 +444,7 @@ impl Drop for State {
 }
 
 pub struct Table {
+    // like what kind of helper????
     helpers: Vec<Column>,
     freehead: SparseIndex,
     table: HashMap<TypeId, (Column, DenseColumn)>,
@@ -620,6 +622,7 @@ impl Table {
                 break;
             }
         }
+        // todo this is SO WRONG wtf
         if sparse_index == self.freehead {
             self.double();
             self.freehead = self.cap() / 2;
@@ -755,10 +758,83 @@ impl Table {
 
     // todo, load/save a single column, then reassemble into a whole table.
     // what if we use a savable trait that has a method to save/load stuff
-    pub fn load_column<C: 'static + Sized>() {
-        todo!()
+    pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
+        &self,
+    ) -> Result<(String, String, String), &'static str> {
+        let (sparse_col, dense_col) = self
+            .table
+            .get(&type_id::<C>())
+            .ok_or("no such column in table")?;
+
+        unsafe {
+            let temp_sparse_vec =
+                Vec::from_raw_parts(sparse_col.ptr as *mut usize, sparse_col.cap, sparse_col.cap);
+            let temp_dense_vec =
+                Vec::from_raw_parts(dense_col.ptr as *mut C, dense_col.len, dense_col.cap);
+            let temp_dense_sparse_vec = Vec::from_raw_parts(
+                dense_col.sparse_ptr as *mut usize,
+                dense_col.len,
+                dense_col.cap,
+            );
+
+            let sparse = serde_json::to_string::<Vec<usize>>(&temp_sparse_vec)
+                .ok()
+                .ok_or("err during serializing sparse")?;
+            let dense = serde_json::to_string::<Vec<C>>(&temp_dense_vec)
+                .ok()
+                .ok_or("err during serializing dense")?;
+            let dense_sparse = serde_json::to_string::<Vec<usize>>(&temp_dense_sparse_vec)
+                .ok()
+                .ok_or("err during serializing dense")?;
+
+            temp_sparse_vec.leak();
+            temp_dense_vec.leak();
+            temp_dense_sparse_vec.leak();
+            Ok((sparse, dense, dense_sparse))
+        }
     }
-    pub fn save_column<C: 'static + Sized>() {
+
+    pub fn load_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
+        &mut self,
+        sparse: &'a String,
+        dense: &'a String,
+        dense_sparse: &'a String,
+    ) -> Result<(), &'static str> {
+        if self.table.get(&type_id::<C>()).is_some() {
+            return Err("type already in table");
+        } else {
+            let first = serde_json::from_str::<Vec<usize>>(&sparse).unwrap();
+            let second = serde_json::from_str::<Vec<C>>(&dense).unwrap();
+            let third = serde_json::from_str::<Vec<usize>>(&dense_sparse).unwrap();
+
+            let sparse_col = Column {
+                // todo IS THIS EVEN MEMORY SAFE???????
+                cap: first.capacity(),
+                ptr: first.leak().as_ptr() as _,
+            };
+
+            let len = second.len();
+            // handle zst
+            let dense_col = DenseColumn {
+                sparse_ptr: third.leak().as_ptr() as _,
+                len,
+                cap: second.capacity(),
+                layout: if Layout::new::<C>().size() == 0 {
+                    ZST_LAYOUT
+                } else {
+                    Layout::new::<C>()
+                },
+                ptr: second.leak().as_ptr() as _,
+            };
+
+            self.table.insert(type_id::<C>(), (sparse_col, dense_col));
+
+            Ok(())
+        }
+    }
+
+    // todo, mostly just enumerate all the components and update all component numbers and freehead
+    pub fn finalize_loading(&mut self) {
         todo!()
     }
 }
@@ -846,18 +922,53 @@ impl ECS {
 mod test {
     use super::*;
 
+    #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+    struct MyStruct {
+        // unfortunately you would have to avoid using &str in any components if you still wanna save them...
+        float: f32,
+    }
+
     #[test]
     fn test() {
-        let mut ecs = ECS::new(|table: &mut Table| {});
-        let mut table = &mut ecs.table;
+        // let value = serde_json::to_string_pretty(&[1, 2, 3]).unwrap();
+        // println!("{:?}", value)
 
-        for each in 1..11 {
-            let index = table.insert_new::<usize>(each);
-            if index % 2 == 0 {
-                table.insert_at::<isize>(index, (each) as isize).unwrap();
-            }
+        let mut table = Table::new();
+
+        for each in 0..200 {
+            table.insert_new(MyStruct { float: each as _ });
         }
 
-        let mut thing = table.query_with_filter::<usize>(Filter::NULL);
+        // for each in 10..200 {
+        //     table.insert_new(MyStruct { float: each as _ });
+        // }
+
+        let (one, two, three) = table.save_column::<MyStruct>().unwrap();
+        // println!("{:?}", two);
+
+        drop(table);
+
+        let mut table = Table::new();
+
+        table.load_column::<MyStruct>(&one, &two, &three).unwrap();
+        // table.freehead = 200;
+
+        // ok why is this 4096 rather than 1024??
+        for each in 200..1000 {
+            table.insert_new(MyStruct { float: each as _ });
+        }
+        println!(
+            "{:?}",
+            table.table.get(&type_id::<MyStruct>()).unwrap().0.cap
+        )
+
+        // todo, there's bug here
+        // println!("{:?}", table.query_with_filter::<MyStruct>(Filter::NULL));
+
+        // for each in table.query_with_filter::<MyStruct>(Filter::NULL) {
+        //     print!("{:?}, ", each);
+        // }
+
+        // todo, test if column can realloc after getting loaded
     }
 }
