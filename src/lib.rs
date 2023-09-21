@@ -752,6 +752,10 @@ impl Table {
         sparse_index: SparseIndex,
         value: C,
     ) -> Result<SparseIndex, &'static str> {
+        if sparse_index == 0 {
+            return Err("sparse index starts from 1");
+        }
+
         let cap = self.cap();
         let (target_sparse, target_dense) = self
             .table
@@ -873,13 +877,10 @@ impl Table {
         )
     }
 
-    // todo, load/save a single column, then reassemble into a whole table.
-    // what if we use a savable trait that has a method to save/load stuff.
-
-    // todo. should lock up the table when the saving just begin, unlock after saving the table metadata
+    // todo. should lock up the table when the saving just begins, unlock after all the stuff is done
     pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
         &self,
-    ) -> Result<(String, String, String), &'static str> {
+    ) -> Result<SavedColumn<'a, C>, &'static str> {
         let (sparse_col, dense_col) = self
             .table
             .get(&type_id::<C>())
@@ -909,31 +910,35 @@ impl Table {
             temp_sparse_vec.leak();
             temp_dense_vec.leak();
             temp_dense_sparse_vec.leak();
-            Ok((sparse, dense, dense_sparse))
+            Ok(SavedColumn::new(sparse, dense, dense_sparse))
         }
     }
 
     pub fn load_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
         &mut self,
-        sparse: &'a String,
-        dense: &'a String,
-        dense_sparse: &'a String,
+        saved_data: &'a SavedColumn<'a, C>,
     ) -> Result<(), &'static str> {
         if self.table.get(&type_id::<C>()).is_some() {
             return Err("type already in table");
         } else {
-            let first = serde_json::from_str::<Vec<usize>>(&sparse).unwrap();
-            let second = serde_json::from_str::<Vec<C>>(&dense).unwrap();
-            let third = serde_json::from_str::<Vec<usize>>(&dense_sparse).unwrap();
+            let first = serde_json::from_str::<Vec<usize>>(&saved_data.sparse).unwrap();
+            let second = serde_json::from_str::<Vec<C>>(&saved_data.dense).unwrap();
+            let third = serde_json::from_str::<Vec<usize>>(&saved_data.dense_sparse).unwrap();
 
             assert!(
-                first.capacity() % 64 == 0,
+                first.capacity() != 0
+                    && first.capacity() % 64 == 0
+                    && ((first.capacity() / 64) & (first.capacity() / 64 - 1)) == 0,
                 "column cap isn't a power of 64, possible save data corruption"
             );
-            // todo, additional check to make sure that data is not corrupted
+
+            // todo, additional checks to make sure that data is not corrupted,
+            // namely the linking between sparse and densesparse
+            // and the first bit of all non zero indices
+            // note that even so there's no guarantee to whether or
+            // not the actual components are corrupted
 
             let sparse_col = Column {
-                // todo IS THIS EVEN MEMORY SAFE???????
                 cap: first.capacity(),
                 ptr: first.leak().as_ptr() as _,
             };
@@ -958,12 +963,92 @@ impl Table {
         }
     }
 
-    pub fn finalize_loading(&mut self) {
+    pub fn finalize_loading(&mut self) -> Result<(), &'static str> {
         // first it's guaranteed that all columns are power of 64, so alignment is ok
+        // and all sparse and dense is linked ok so no worry about that
+
+        // it is also guarateed that there will be free space in all these columns
+
+        // we just need to find the first freehead, and enumerate all num of comp,
+
+        // first we need to make sure all comps are of same size
+        let mut table_cap = None::<usize>;
+        for (_, (col, _)) in &self.table {
+            if table_cap.is_none() {
+                table_cap = Some(col.cap);
+            } else if table_cap.unwrap() != col.cap {
+                return Err("columns aren't of the same size");
+            }
+        }
+        if table_cap.is_none() {
+            return Err("there's no comp column in this table");
+        }
+
+        // then we need to adjust util cols
+        let times_to_double = ((table_cap.unwrap() / 64) as f32).log2() as usize;
+        for _ in 0..times_to_double {
+            self.sparse_index_column.double();
+
+            for each in self.cap() / 128..self.cap() / 64 {
+                self.sparse_index_column.as_simd()[each] = SIMD_START + Simd::splat(64 * each);
+            }
+
+            self.num_of_comp_column.double();
+            self.num_of_comp_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
+
+            self.buffers.zeros_column.double();
+            self.buffers.zeros_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
+
+            self.buffers.ones_column.double();
+            self.buffers.ones_column.as_simd()[self.cap() / 128..].fill(Simd::splat(1));
+
+            for each in &mut self.buffers.buffers {
+                each.double();
+            }
+        }
+
+        let mut first_freehead = None::<SparseIndex>;
+        // enumerate all the num of comps
+        for index in 1..table_cap.unwrap() {
+            let mut temp_counter = 0;
+            for (_, (col, _)) in &self.table {
+                if col.as_slice()[index] != 0 {
+                    temp_counter += 1;
+                }
+            }
+            self.num_of_comp_column.as_slice()[index] = temp_counter;
+
+            if first_freehead.is_none() && temp_counter == 0 {
+                first_freehead = Some(index);
+            }
+        }
+
+        self.freehead = first_freehead.unwrap();
+
+        Ok(())
     }
 }
 
-// todo intoiter for IterMut
+pub struct SavedColumn<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> {
+    sparse: String,
+    dense: String,
+    dense_sparse: String,
+
+    _phantom: PhantomData<&'a C>,
+}
+// todo what if we remove static from all components
+impl<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> SavedColumn<'a, C> {
+    fn new(sparse: String, dense: String, dense_sparse: String) -> Self {
+        Self {
+            sparse,
+            dense,
+            dense_sparse,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+// todo intoiter for IterMut, or at least clone to vec
 
 // todo consider make this type safer, it currently allows you to save it after adding/removing stuff in
 // the respective column, you can also somehow preserve it to the next tick and it still derefs
@@ -1084,36 +1169,59 @@ mod test {
     fn save() {
         let mut table = Table::new();
 
-        // todo ok why is this 4096 rather than 1024??
         for each in 0..200 {
             table.insert_new(MyStruct { float: each as _ });
         }
 
-        let (one, two, three) = table.save_column::<MyStruct>().unwrap();
+        // table.remove::<MyStruct>(120).unwrap();
+
+        for each in 1..101 {
+            table.insert_at::<usize>(each, each as usize).unwrap();
+        }
+
+        for each in 150..201 {
+            table.insert_at::<usize>(each, each as usize).unwrap();
+        }
+
+        let data_mystruct = table.save_column::<MyStruct>().unwrap();
+        let data_usize = table.save_column::<usize>().unwrap();
 
         drop(table);
 
         let mut table = Table::new();
 
-        table.load_column::<MyStruct>(&one, &two, &three).unwrap();
-        table.finalize_loading();
+        table.load_column::<MyStruct>(&data_mystruct).unwrap();
+        table.load_column::<usize>(&data_usize).unwrap();
+        table.finalize_loading().unwrap();
+
+        // println!("{:?}", table.num_of_comp_column.as_slice());
+        // println!("{:?}", table.freehead);
 
         for each in 200..1000 {
             table.insert_new(MyStruct { float: each as _ });
         }
-        println!(
-            "{:?}",
-            table.table.get(&type_id::<MyStruct>()).unwrap().0.cap
-        );
+        // println!(
+        //     "{:?}",
+        //     table
+        //         .table
+        //         .get(&type_id::<MyStruct>())
+        //         .unwrap()
+        //         .1
+        //         // .as_slice::<MyStruct>()
+        //         .as_sparse_slice()
+        // );
 
-        // todo, there's bug here, it's maybe due to the fact that the column isn't resizing as they should
-        println!("{:?}", table.query_with_filter::<MyStruct>(Filter::NULL));
+        // println!(
+        //     "{:?}",
+        //     table.query_with_filter::<MyStruct>(!Filter::from::<usize>())
+        // );
+        let mut counter = 0;
+        for each in table.query_with_filter::<MyStruct>(Filter::NULL) {
+            counter += 1;
+        }
+        // println!("{:?}", counter);
 
-        // for each in table.query_with_filter::<MyStruct>(Filter::NULL) {
-        //     print!("{:?}, ", each);
-        // }
-
-        // todo, test if column can realloc after getting loaded
+        // todo valgrind this whole saving thing
     }
 
     #[test]
