@@ -43,6 +43,13 @@ const SHIFT: Simd<usize, 64> = Simd::from_array([63; 64]);
 const ONE: Simd<usize, 64> = Simd::from_array([1; 64]);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BufferIndx {
+    ONES,
+    ZEROS,
+    Index(BufferIndex),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Operation {
     And,
     Or,
@@ -443,39 +450,77 @@ impl Drop for State {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BufferStatus {
+    Vacant,
+    Taken,
+}
+
 pub struct Table {
     // like what kind of helper????
     helpers: Vec<Column>,
     freehead: SparseIndex,
+
+    current_tick: Wrapping<usize>,
+
+    // helper columns include: sparse index column that tracks which sparse index this row is,
+    // status for all the temp buffers
+    sparse_index_column: Column,
+    // number of components this row has, indexed by sparse indices
+    num_of_comp_column: Column,
+    // ones and zeros
+    zeros_column: Column,
+    ones_column: Column,
+
+    // buffer status col,
+    buffer_status_column: Vec<BufferStatus>,
+    buffers: Vec<Column>,
+
     table: HashMap<TypeId, (Column, DenseColumn)>,
     states: HashMap<TypeId, State>,
-    current_tick: Wrapping<usize>,
 }
 
 impl Table {
     fn new() -> Self {
         let mut result = Self {
+            freehead: 1,
+
             table: HashMap::new(),
             states: HashMap::new(),
             helpers: vec![],
-            freehead: 1,
             current_tick: Wrapping(0),
+
+            sparse_index_column: Column::new(64),
+            num_of_comp_column: Column::new(64),
+            ones_column: Column::new(64),
+            zeros_column: Column::new(64),
+
+            buffer_status_column: vec![BufferStatus::Vacant; 8],
+            buffers: vec![],
         };
 
         for _ in 0..10 {
             result.helpers.push(Column::new(64));
         }
-        // 0 -> available, 1 -> in use
-        // sparse column, num of components column, buffer availability column, 0s and 1s
-        result.helpers[0].as_simd()[0] = SIMD_START;
-        result.helpers[2].as_slice()[0..5].fill(1);
+
+        // result.helpers[0].as_simd()[0] = SIMD_START;
+        // result.helpers[2].as_slice()[0..5].fill(1);
+
         result.helpers[4].as_simd().fill(Simd::splat(1));
+
+        // new code
+        result.sparse_index_column.as_simd()[0] = SIMD_START;
+        result.num_of_comp_column.as_simd()[0] = Simd::splat(0);
+        result.ones_column.as_simd()[0] = Simd::splat(1);
+        // is this even used????
+        result.zeros_column.as_simd()[0] = Simd::splat(0);
 
         result
     }
 
     fn cap(&self) -> usize {
-        self.helpers[0].cap
+        // self.helpers[0].cap
+        self.sparse_index_column.cap
     }
 
     fn double(&mut self) {
@@ -487,8 +532,12 @@ impl Table {
         }
 
         for each in self.cap() / (2 * 64)..self.cap() / 64 {
-            self.helpers[0].as_simd()[each] = SIMD_START + Simd::splat(64 * each);
+            self.sparse_index_column.as_simd()[each] = SIMD_START + Simd::splat(64 * each);
         }
+    }
+
+    fn get_free_buffer(&mut self) -> BufferIndex {
+        todo!()
     }
 
     fn apply_operation_then_cache(
@@ -501,17 +550,29 @@ impl Table {
         let left_simd = self.helpers[left].as_simd();
         let right_simd = self.helpers[right].as_simd();
         let mut write_buffer_index = 0;
-        for each in 5..self.helpers.len() {
-            if self.helpers[2].as_slice()[each] == 0 {
-                self.helpers[2].as_slice()[each] = 1;
-                write_buffer_index = each;
+
+        // for each in 5..self.helpers.len() {
+        //     if self.helpers[2].as_slice()[each] == 0 {
+        //         self.helpers[2].as_slice()[each] = 1;
+        //         write_buffer_index = each;
+        //         break;
+        //     }
+        // }
+
+        for buffer_index in 0..self.buffers.len() {
+            if self.buffer_status_column.as_slice()[buffer_index] == BufferStatus::Vacant {
+                self.buffer_status_column[buffer_index] = BufferStatus::Taken;
+                write_buffer_index = buffer_index;
                 break;
             }
         }
+
+        // this thing actually stretches as you go
         if write_buffer_index == 0 {
             self.helpers.push(Column::new(self.cap()));
             write_buffer_index = self.helpers.len() - 1;
         }
+
         let write_buffer_simd = self.helpers[write_buffer_index].as_simd();
         match op {
             Operation::And => {
@@ -535,13 +596,18 @@ impl Table {
                 write_buffer_simd[each] = !write_buffer_simd[each];
             }
         }
+
+        // what the fuck does this even do???? just so we don't accidentally free the two preset columns ok
         // make sure these are not preset columns
-        if left != 3 && left != 4 {
-            self.helpers[2].as_slice()[left] = 0;
-        }
-        if right != 3 && right != 4 {
-            self.helpers[2].as_slice()[right] = 0;
-        }
+        // if left != 3 && left != 4 {
+        //     // self.helpers[2].as_slice()[left] = 0;
+        //     self.buffer_status_column[left] = BufferStatus::Vacant;
+        // }
+        // if right != 3 && right != 4 {
+        //     // self.helpers[2].as_slice()[right] = 0;
+        //     self.buffer_status_column[right] = BufferStatus::Vacant;
+        // }
+
         write_buffer_index
     }
 
@@ -573,8 +639,10 @@ impl Table {
                     }
                     None => {
                         if *invert_flag {
+                            // this is the ones column
                             4
                         } else {
+                            // this is the zeros column
                             3
                         }
                     }
@@ -592,8 +660,12 @@ impl Table {
     }
 
     fn free_all_buffers(&mut self) {
-        for each in 5..self.helpers.len() {
-            self.helpers[2].as_slice()[each] = 0;
+        // for each in 5..self.helpers.len() {
+        //     self.helpers[2].as_slice()[each] = 0;
+        // }
+        // this is actually a shallow free????
+        for each in 5..self.buffer_status_column.len() {
+            self.buffer_status_column[each] = BufferStatus::Vacant;
         }
     }
 
@@ -742,7 +814,7 @@ impl Table {
         let filter = Filter::from::<C>() & filter;
         let result_index = self.filter_traverse(0, &filter);
         let result_buffer_simd = self.helpers[result_index].as_simd();
-        let sparse_simd = self.helpers[0].as_simd();
+        let sparse_simd = self.sparse_index_column.as_simd();
         for each in 0..self.cap() / 64 {
             result_buffer_simd[each] =
                 !((result_buffer_simd[each] >> SHIFT) - ONE) & sparse_simd[each];
@@ -847,6 +919,9 @@ impl Table {
 pub struct IterMut<'a, C: 'static + Sized> {
     ptr: *mut usize,
     end: *mut usize,
+
+    // todo ticking would clear the buffer, but doing a filtering again would also clear the buffer
+    // so instead the buffer should be locked and so should the api for adding/removing components
     tick_index: Wrapping<usize>,
     op_index: Wrapping<usize>,
 
@@ -939,10 +1014,6 @@ mod test {
             table.insert_new(MyStruct { float: each as _ });
         }
 
-        // for each in 10..200 {
-        //     table.insert_new(MyStruct { float: each as _ });
-        // }
-
         let (one, two, three) = table.save_column::<MyStruct>().unwrap();
         // println!("{:?}", two);
 
@@ -951,6 +1022,7 @@ mod test {
         let mut table = Table::new();
 
         table.load_column::<MyStruct>(&one, &two, &three).unwrap();
+        table.finalize_loading();
         // table.freehead = 200;
 
         // ok why is this 4096 rather than 1024??
@@ -960,15 +1032,22 @@ mod test {
         println!(
             "{:?}",
             table.table.get(&type_id::<MyStruct>()).unwrap().0.cap
-        )
+        );
 
-        // todo, there's bug here
-        // println!("{:?}", table.query_with_filter::<MyStruct>(Filter::NULL));
+        // todo, there's bug here, it's maybe due to the fact that the column isn't resizing as they should
+        println!("{:?}", table.query_with_filter::<MyStruct>(Filter::NULL));
 
         // for each in table.query_with_filter::<MyStruct>(Filter::NULL) {
         //     print!("{:?}, ", each);
         // }
 
         // todo, test if column can realloc after getting loaded
+    }
+
+    #[test]
+    fn foo() {
+        let table = Table::new();
+
+        println!("{:?}", table.num_of_comp_column.as_slice());
     }
 }
