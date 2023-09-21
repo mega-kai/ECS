@@ -456,6 +456,16 @@ enum BufferStatus {
     Taken,
 }
 
+struct Buffers {
+    // ones and zeros
+    zeros_column: Column,
+    ones_column: Column,
+
+    // buffer status col,
+    buffer_status_column: Vec<BufferStatus>,
+    buffers: Vec<Column>,
+}
+
 pub struct Table {
     // like what kind of helper????
     helpers: Vec<Column>,
@@ -468,6 +478,7 @@ pub struct Table {
     sparse_index_column: Column,
     // number of components this row has, indexed by sparse indices
     num_of_comp_column: Column,
+
     // ones and zeros
     zeros_column: Column,
     ones_column: Column,
@@ -499,15 +510,6 @@ impl Table {
             buffers: vec![],
         };
 
-        for _ in 0..10 {
-            result.helpers.push(Column::new(64));
-        }
-
-        // result.helpers[0].as_simd()[0] = SIMD_START;
-        // result.helpers[2].as_slice()[0..5].fill(1);
-
-        result.helpers[4].as_simd().fill(Simd::splat(1));
-
         // new code
         result.sparse_index_column.as_simd()[0] = SIMD_START;
         result.num_of_comp_column.as_simd()[0] = Simd::splat(0);
@@ -519,25 +521,36 @@ impl Table {
     }
 
     fn cap(&self) -> usize {
-        // self.helpers[0].cap
         self.sparse_index_column.cap
     }
 
     fn double(&mut self) {
-        for each in &mut self.helpers {
-            each.double();
-        }
-        for (_, (each, _)) in &mut self.table {
-            each.double();
-        }
-
+        // doubling the sparse col, note that you have to double the sparse col first since we be using
+        // self.cap() later on
         for each in self.cap() / (2 * 64)..self.cap() / 64 {
             self.sparse_index_column.as_simd()[each] = SIMD_START + Simd::splat(64 * each);
         }
-    }
 
-    fn get_free_buffer(&mut self) -> BufferIndex {
-        todo!()
+        // doubling other utility cols
+        self.num_of_comp_column.double();
+        self.num_of_comp_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
+
+        self.zeros_column.double();
+        self.zeros_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
+
+        self.ones_column.double();
+        self.ones_column.as_simd()[self.cap() / 128..].fill(Simd::splat(1));
+
+        // doubling all the temp buffers
+        for each in &mut self.buffers {
+            each.double();
+            // buffers don't need to populated i guess
+        }
+
+        // doubling all the comp columns
+        for (_, (each, _)) in &mut self.table {
+            each.double();
+        }
     }
 
     fn apply_operation_then_cache(
@@ -549,15 +562,8 @@ impl Table {
     ) -> BufferIndex {
         let left_simd = self.helpers[left].as_simd();
         let right_simd = self.helpers[right].as_simd();
-        let mut write_buffer_index = 0;
 
-        // for each in 5..self.helpers.len() {
-        //     if self.helpers[2].as_slice()[each] == 0 {
-        //         self.helpers[2].as_slice()[each] = 1;
-        //         write_buffer_index = each;
-        //         break;
-        //     }
-        // }
+        let mut write_buffer_index = usize::MAX;
 
         for buffer_index in 0..self.buffers.len() {
             if self.buffer_status_column.as_slice()[buffer_index] == BufferStatus::Vacant {
@@ -568,12 +574,13 @@ impl Table {
         }
 
         // this thing actually stretches as you go
-        if write_buffer_index == 0 {
-            self.helpers.push(Column::new(self.cap()));
-            write_buffer_index = self.helpers.len() - 1;
+        if write_buffer_index == usize::MAX {
+            self.buffers.push(Column::new(self.cap()));
+            write_buffer_index = self.buffers.len() - 1;
         }
 
-        let write_buffer_simd = self.helpers[write_buffer_index].as_simd();
+        let write_buffer_simd = self.buffers[write_buffer_index].as_simd();
+
         match op {
             Operation::And => {
                 for each in 0..self.cap() / 64 {
@@ -597,17 +604,6 @@ impl Table {
             }
         }
 
-        // what the fuck does this even do???? just so we don't accidentally free the two preset columns ok
-        // make sure these are not preset columns
-        // if left != 3 && left != 4 {
-        //     // self.helpers[2].as_slice()[left] = 0;
-        //     self.buffer_status_column[left] = BufferStatus::Vacant;
-        // }
-        // if right != 3 && right != 4 {
-        //     // self.helpers[2].as_slice()[right] = 0;
-        //     self.buffer_status_column[right] = BufferStatus::Vacant;
-        // }
-
         write_buffer_index
     }
 
@@ -616,19 +612,23 @@ impl Table {
             Node::Single(invert_flag, id_index) => {
                 match self.table.get(&filter.ids[*id_index as usize]) {
                     Some((sparse_column, _)) => {
-                        let mut buffer_index = 0;
-                        for each in 5..self.helpers.len() {
-                            if self.helpers[2].as_slice()[each] == 0 {
-                                self.helpers[2].as_slice()[each] = 1;
-                                buffer_index = each;
+                        let mut buffer_index = usize::MAX;
+
+                        for index in 0..self.buffer_status_column.len() {
+                            if self.buffer_status_column[index] == BufferStatus::Vacant {
+                                self.buffer_status_column[index] = BufferStatus::Taken;
+                                buffer_index = index;
                                 break;
                             }
                         }
-                        if buffer_index == 0 {
-                            self.helpers.push(Column::new(self.cap()));
-                            buffer_index = self.helpers.len() - 1;
+
+                        if buffer_index == usize::MAX {
+                            self.buffers.push(Column::new(self.cap()));
+                            buffer_index = self.buffers.len() - 1;
                         }
-                        let buffer_simd = self.helpers[buffer_index].as_simd();
+
+                        let buffer_simd = self.buffers[buffer_index].as_simd();
+
                         buffer_simd.clone_from_slice(&sparse_column.as_simd());
                         if *invert_flag {
                             for each in 0..self.cap() / 64 {
@@ -660,9 +660,6 @@ impl Table {
     }
 
     fn free_all_buffers(&mut self) {
-        // for each in 5..self.helpers.len() {
-        //     self.helpers[2].as_slice()[each] = 0;
-        // }
         // this is actually a shallow free????
         for each in 5..self.buffer_status_column.len() {
             self.buffer_status_column[each] = BufferStatus::Vacant;
@@ -689,7 +686,7 @@ impl Table {
     pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> SparseIndex {
         let sparse_index = self.freehead;
         for each in sparse_index + 1..self.cap() {
-            if self.helpers[1].as_slice()[each] == 0 {
+            if self.num_of_comp_column.as_slice()[each] == 0 {
                 self.freehead = each;
                 break;
             }
@@ -709,7 +706,9 @@ impl Table {
         let (dense_index, _) = targe_dense.push(value, sparse_index);
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
         targe_dense.as_sparse_slice()[dense_index] = sparse_index;
-        self.helpers[1].as_slice()[sparse_index] += 1;
+
+        self.num_of_comp_column.as_slice()[sparse_index] += 1;
+
         sparse_index
     }
     pub fn insert_at<C: 'static + Sized>(
@@ -728,7 +727,9 @@ impl Table {
                 target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
 
                 target_dense.as_sparse_slice()[dense_index] = sparse_index;
-                self.helpers[1].as_slice()[sparse_index] += 1;
+
+                self.num_of_comp_column.as_slice()[sparse_index] += 1;
+
                 Ok(sparse_index)
             }
             _ => Err("sparse index at this type column is already taken"),
@@ -751,10 +752,14 @@ impl Table {
             _ => {
                 let dense_index = target_sparse.as_slice()[sparse_index] & MASK_TAIL;
                 target_sparse.as_slice()[sparse_index] = 0;
-                self.helpers[1].as_slice()[sparse_index] -= 1;
-                if self.helpers[1].as_slice()[sparse_index] == 0 && sparse_index < self.freehead {
+
+                self.num_of_comp_column.as_slice()[sparse_index] -= 1;
+                if self.num_of_comp_column.as_slice()[sparse_index] == 0
+                    && sparse_index < self.freehead
+                {
                     self.freehead = sparse_index;
                 }
+
                 // last element
                 let value = if dense_index == target_dense.len - 1 {
                     target_dense.pop()
