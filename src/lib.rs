@@ -19,7 +19,7 @@ use std::intrinsics::type_id;
 use std::marker::PhantomData;
 use std::mem::{forget, MaybeUninit};
 use std::num::Wrapping;
-use std::ops::{BitAnd, BitOr, BitXor, Deref, DerefMut, Not, Range};
+use std::ops::{BitAnd, BitOr, BitXor, Deref, DerefMut, Index, IndexMut, Not, Range};
 use std::ptr::copy;
 use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
@@ -27,7 +27,6 @@ use std::{alloc::Layout, fmt::Debug};
 
 type SparseIndex = usize;
 type DenseIndex = usize;
-type BufferIndex = usize;
 type TypeId = u128;
 
 const MASK_HEAD: usize = 1 << (usize::BITS - 1);
@@ -43,10 +42,10 @@ const SHIFT: Simd<usize, 64> = Simd::from_array([63; 64]);
 const ONE: Simd<usize, 64> = Simd::from_array([1; 64]);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BufferIndx {
+enum BufferIndex {
     ONES,
     ZEROS,
-    Index(BufferIndex),
+    Index(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -219,7 +218,14 @@ impl Not for Filter {
                 Node::Single(flag, _) => *flag = !*flag,
                 Node::Dual(flag, _, _, _) => *flag = !*flag,
             },
-            None => panic!("invalid filter"),
+
+            None => {
+                if self == Self::NULL {
+                    self.num_of_nodes = u8::MAX;
+                } else {
+                    panic!("invalid filter");
+                }
+            }
         }
         self
     }
@@ -461,31 +467,75 @@ struct Buffers {
     zeros_column: Column,
     ones_column: Column,
 
-    // buffer status col,
+    //kkeep track of the status
     buffer_status_column: Vec<BufferStatus>,
+
+    // actual buffers
     buffers: Vec<Column>,
 }
 
+impl Index<BufferIndex> for Buffers {
+    type Output = Column;
+
+    fn index(&self, index: BufferIndex) -> &Self::Output {
+        match index {
+            BufferIndex::ONES => &self.ones_column,
+            BufferIndex::ZEROS => &self.zeros_column,
+            BufferIndex::Index(val) => &self.buffers[val],
+        }
+    }
+}
+
+impl IndexMut<BufferIndex> for Buffers {
+    fn index_mut(&mut self, index: BufferIndex) -> &mut Self::Output {
+        match index {
+            BufferIndex::ONES => &mut self.ones_column,
+            BufferIndex::ZEROS => &mut self.zeros_column,
+            BufferIndex::Index(val) => &mut self.buffers[val],
+        }
+    }
+}
+
+impl Buffers {
+    fn len(&self) -> usize {
+        self.buffers.len()
+    }
+
+    fn get_index(&mut self) -> Option<BufferIndex> {
+        for index in 0..self.len() {
+            if self.buffer_status_column[index] == BufferStatus::Vacant {
+                self.buffer_status_column[index] = BufferStatus::Taken;
+                return Some(BufferIndex::Index(index));
+                break;
+            }
+        }
+        None
+    }
+
+    fn new_buffer(&mut self, size: usize) -> BufferIndex {
+        self.buffers.push(Column::new(size));
+        self.buffer_status_column.push(BufferStatus::Vacant);
+        BufferIndex::Index(self.buffers.len() - 1)
+    }
+
+    fn free_all(&mut self) {
+        // this is actually a shallow free
+        self.buffer_status_column.fill(BufferStatus::Vacant);
+    }
+}
+
 pub struct Table {
-    // like what kind of helper????
-    helpers: Vec<Column>,
     freehead: SparseIndex,
 
     current_tick: Wrapping<usize>,
 
-    // helper columns include: sparse index column that tracks which sparse index this row is,
-    // status for all the temp buffers
+    // sparse index column that tracks which sparse index this row is,
     sparse_index_column: Column,
     // number of components this row has, indexed by sparse indices
     num_of_comp_column: Column,
 
-    // ones and zeros
-    zeros_column: Column,
-    ones_column: Column,
-
-    // buffer status col,
-    buffer_status_column: Vec<BufferStatus>,
-    buffers: Vec<Column>,
+    // all the buffers and buffer related stuff
+    buffers: Buffers,
 
     table: HashMap<TypeId, (Column, DenseColumn)>,
     states: HashMap<TypeId, State>,
@@ -498,24 +548,28 @@ impl Table {
 
             table: HashMap::new(),
             states: HashMap::new(),
-            helpers: vec![],
+
             current_tick: Wrapping(0),
 
             sparse_index_column: Column::new(64),
             num_of_comp_column: Column::new(64),
-            ones_column: Column::new(64),
-            zeros_column: Column::new(64),
 
-            buffer_status_column: vec![BufferStatus::Vacant; 8],
-            buffers: vec![],
+            buffers: Buffers {
+                ones_column: Column::new(64),
+                zeros_column: Column::new(64),
+                buffer_status_column: vec![BufferStatus::Vacant; 8],
+                buffers: vec![],
+            },
         };
 
-        // new code
+        for _ in 0..8 {
+            result.buffers.new_buffer(64);
+        }
+
         result.sparse_index_column.as_simd()[0] = SIMD_START;
         result.num_of_comp_column.as_simd()[0] = Simd::splat(0);
-        result.ones_column.as_simd()[0] = Simd::splat(1);
-        // is this even used????
-        result.zeros_column.as_simd()[0] = Simd::splat(0);
+        result.buffers.ones_column.as_simd()[0] = Simd::splat(1);
+        result.buffers.zeros_column.as_simd()[0] = Simd::splat(0);
 
         result
     }
@@ -527,7 +581,9 @@ impl Table {
     fn double(&mut self) {
         // doubling the sparse col, note that you have to double the sparse col first since we be using
         // self.cap() later on
-        for each in self.cap() / (2 * 64)..self.cap() / 64 {
+        self.sparse_index_column.double();
+
+        for each in self.cap() / 128..self.cap() / 64 {
             self.sparse_index_column.as_simd()[each] = SIMD_START + Simd::splat(64 * each);
         }
 
@@ -535,14 +591,14 @@ impl Table {
         self.num_of_comp_column.double();
         self.num_of_comp_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
 
-        self.zeros_column.double();
-        self.zeros_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
+        self.buffers.zeros_column.double();
+        self.buffers.zeros_column.as_simd()[self.cap() / 128..].fill(Simd::splat(0));
 
-        self.ones_column.double();
-        self.ones_column.as_simd()[self.cap() / 128..].fill(Simd::splat(1));
+        self.buffers.ones_column.double();
+        self.buffers.ones_column.as_simd()[self.cap() / 128..].fill(Simd::splat(1));
 
         // doubling all the temp buffers
-        for each in &mut self.buffers {
+        for each in &mut self.buffers.buffers {
             each.double();
             // buffers don't need to populated i guess
         }
@@ -560,24 +616,14 @@ impl Table {
         invert_flag: bool,
         op: Operation,
     ) -> BufferIndex {
-        let left_simd = self.helpers[left].as_simd();
-        let right_simd = self.helpers[right].as_simd();
+        let left_simd = self.buffers[left].as_simd();
+        let right_simd = self.buffers[right].as_simd();
 
-        let mut write_buffer_index = usize::MAX;
-
-        for buffer_index in 0..self.buffers.len() {
-            if self.buffer_status_column.as_slice()[buffer_index] == BufferStatus::Vacant {
-                self.buffer_status_column[buffer_index] = BufferStatus::Taken;
-                write_buffer_index = buffer_index;
-                break;
-            }
-        }
-
-        // this thing actually stretches as you go
-        if write_buffer_index == usize::MAX {
-            self.buffers.push(Column::new(self.cap()));
-            write_buffer_index = self.buffers.len() - 1;
-        }
+        let mut write_buffer_index = if let Some(val) = self.buffers.get_index() {
+            val
+        } else {
+            self.buffers.new_buffer(self.cap())
+        };
 
         let write_buffer_simd = self.buffers[write_buffer_index].as_simd();
 
@@ -612,20 +658,11 @@ impl Table {
             Node::Single(invert_flag, id_index) => {
                 match self.table.get(&filter.ids[*id_index as usize]) {
                     Some((sparse_column, _)) => {
-                        let mut buffer_index = usize::MAX;
-
-                        for index in 0..self.buffer_status_column.len() {
-                            if self.buffer_status_column[index] == BufferStatus::Vacant {
-                                self.buffer_status_column[index] = BufferStatus::Taken;
-                                buffer_index = index;
-                                break;
-                            }
-                        }
-
-                        if buffer_index == usize::MAX {
-                            self.buffers.push(Column::new(self.cap()));
-                            buffer_index = self.buffers.len() - 1;
-                        }
+                        let mut buffer_index = if let Some(val) = self.buffers.get_index() {
+                            val
+                        } else {
+                            self.buffers.new_buffer(self.cap())
+                        };
 
                         let buffer_simd = self.buffers[buffer_index].as_simd();
 
@@ -640,10 +677,10 @@ impl Table {
                     None => {
                         if *invert_flag {
                             // this is the ones column
-                            4
+                            BufferIndex::ONES
                         } else {
                             // this is the zeros column
-                            3
+                            BufferIndex::ZEROS
                         }
                     }
                 }
@@ -660,10 +697,7 @@ impl Table {
     }
 
     fn free_all_buffers(&mut self) {
-        // this is actually a shallow free????
-        for each in 5..self.buffer_status_column.len() {
-            self.buffer_status_column[each] = BufferStatus::Vacant;
-        }
+        self.buffers.free_all();
     }
 
     /// if u want to init a column with nothing in it
@@ -685,17 +719,19 @@ impl Table {
 
     pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> SparseIndex {
         let sparse_index = self.freehead;
+
         for each in sparse_index + 1..self.cap() {
             if self.num_of_comp_column.as_slice()[each] == 0 {
                 self.freehead = each;
                 break;
             }
         }
-        // todo this is SO WRONG wtf
+
         if sparse_index == self.freehead {
             self.double();
             self.freehead = self.cap() / 2;
         }
+
         let cap = self.cap();
 
         let (target_sparse, targe_dense) = self
@@ -816,15 +852,19 @@ impl Table {
     }
 
     pub fn query_with_filter<C: 'static + Sized>(&mut self, filter: Filter) -> IterMut<C> {
+        if filter == !Filter::NULL {
+            return IterMut::new_empty();
+        }
         let filter = Filter::from::<C>() & filter;
+        // start traversing from root node
         let result_index = self.filter_traverse(0, &filter);
-        let result_buffer_simd = self.helpers[result_index].as_simd();
+        let result_buffer_simd = self.buffers[result_index].as_simd();
         let sparse_simd = self.sparse_index_column.as_simd();
         for each in 0..self.cap() / 64 {
             result_buffer_simd[each] =
                 !((result_buffer_simd[each] >> SHIFT) - ONE) & sparse_simd[each];
         }
-        let result_buffer_slice = self.helpers[result_index].as_slice(); // [..largest_occupied_sparse_index]
+        let result_buffer_slice = self.buffers[result_index].as_slice(); // [..largest_occupied_sparse_index]
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
         IterMut::new(
             result_buffer_slice.as_mut_ptr_range(),
@@ -834,7 +874,9 @@ impl Table {
     }
 
     // todo, load/save a single column, then reassemble into a whole table.
-    // what if we use a savable trait that has a method to save/load stuff
+    // what if we use a savable trait that has a method to save/load stuff.
+
+    // todo. should lock up the table when the saving just begin, unlock after saving the table metadata
     pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
         &self,
     ) -> Result<(String, String, String), &'static str> {
@@ -884,6 +926,12 @@ impl Table {
             let second = serde_json::from_str::<Vec<C>>(&dense).unwrap();
             let third = serde_json::from_str::<Vec<usize>>(&dense_sparse).unwrap();
 
+            assert!(
+                first.capacity() % 64 == 0,
+                "column cap isn't a power of 64, possible save data corruption"
+            );
+            // todo, additional check to make sure that data is not corrupted
+
             let sparse_col = Column {
                 // todo IS THIS EVEN MEMORY SAFE???????
                 cap: first.capacity(),
@@ -910,11 +958,12 @@ impl Table {
         }
     }
 
-    // todo, mostly just enumerate all the components and update all component numbers and freehead
     pub fn finalize_loading(&mut self) {
-        todo!()
+        // first it's guaranteed that all columns are power of 64, so alignment is ok
     }
 }
+
+// todo intoiter for IterMut
 
 // todo consider make this type safer, it currently allows you to save it after adding/removing stuff in
 // the respective column, you can also somehow preserve it to the next tick and it still derefs
@@ -936,10 +985,15 @@ pub struct IterMut<'a, C: 'static + Sized> {
 }
 impl<'a, C: 'static + Sized> Debug for IterMut<'a, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let slice = unsafe { from_raw_parts(self.ptr, self.end.offset_from(self.ptr) as usize) };
-        f.debug_struct("IterMutAlt")
-            .field("slice: ", &slice)
-            .finish()
+        if self.ptr.is_null() {
+            f.debug_list().entry(&"empty").finish()
+        } else {
+            let slice =
+                unsafe { from_raw_parts(self.ptr, self.end.offset_from(self.ptr) as usize) };
+            f.debug_struct("IterMutAlt")
+                .field("slice: ", &slice)
+                .finish()
+        }
     }
 }
 impl<'a, C: 'static + Sized> IterMut<'a, C> {
@@ -953,6 +1007,17 @@ impl<'a, C: 'static + Sized> IterMut<'a, C> {
             _phan: PhantomData,
         }
     }
+
+    fn new_empty() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            end: std::ptr::null_mut(),
+            tick_index: Wrapping(0),
+            op_index: Wrapping(0),
+            table: std::ptr::null_mut(),
+            _phan: PhantomData,
+        }
+    }
 }
 impl<'a, C: 'static + Sized> Iterator for IterMut<'a, C> {
     type Item = &'a mut C;
@@ -960,18 +1025,25 @@ impl<'a, C: 'static + Sized> Iterator for IterMut<'a, C> {
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
-            if self.tick_index != (*self.table).current_tick {
+            if self.ptr.is_null() {
                 return None;
-            }
-            if self.ptr != self.end && *self.ptr != 0 {
-                let index = *self.ptr;
-                self.ptr = self.ptr.add(1);
-
-                let thing = (*self.table).read_raw::<C>(index);
-                return Some(thing);
-                // return Some(index);
             } else {
-                return None;
+                // check if it's still in the same tick between filtering and indexing the result
+                if self.tick_index != (*self.table).current_tick {
+                    return None;
+                }
+
+                // if null then it's an empty self, since index always start from 1 and never 0 we also need to check that???
+                if self.ptr != self.end && *self.ptr != 0 {
+                    let index = *self.ptr;
+                    self.ptr = self.ptr.add(1);
+
+                    let thing = (*self.table).read_raw::<C>(index);
+                    return Some(thing);
+                    // return Some(index);
+                } else {
+                    return None;
+                }
             }
         }
     }
@@ -1009,18 +1081,15 @@ mod test {
     }
 
     #[test]
-    fn test() {
-        // let value = serde_json::to_string_pretty(&[1, 2, 3]).unwrap();
-        // println!("{:?}", value)
-
+    fn save() {
         let mut table = Table::new();
 
+        // todo ok why is this 4096 rather than 1024??
         for each in 0..200 {
             table.insert_new(MyStruct { float: each as _ });
         }
 
         let (one, two, three) = table.save_column::<MyStruct>().unwrap();
-        // println!("{:?}", two);
 
         drop(table);
 
@@ -1028,9 +1097,7 @@ mod test {
 
         table.load_column::<MyStruct>(&one, &two, &three).unwrap();
         table.finalize_loading();
-        // table.freehead = 200;
 
-        // ok why is this 4096 rather than 1024??
         for each in 200..1000 {
             table.insert_new(MyStruct { float: each as _ });
         }
@@ -1050,9 +1117,68 @@ mod test {
     }
 
     #[test]
-    fn foo() {
-        let table = Table::new();
+    fn double_test() {
+        let mut table = Table::new();
 
-        println!("{:?}", table.num_of_comp_column.as_slice());
+        for _ in 0..2 {
+            table.double();
+        }
+
+        println!(
+            "sparse_index_column: {:?}",
+            table.sparse_index_column.as_slice()
+        );
+        println!(
+            "num_of_comp_column: {:?}",
+            table.num_of_comp_column.as_slice()
+        );
+
+        println!("zeros_column: {:?}", table.buffers.zeros_column.as_slice());
+        println!("ones_column: {:?}", table.buffers.ones_column.as_slice());
+
+        for index in 0..8 {
+            println!("{:?}", table.buffers.buffers[index].as_slice().len());
+        }
+    }
+
+    #[test]
+    fn insert() {
+        let mut table = Table::new();
+
+        for each in 0..200000 {
+            table.insert_new::<usize>(each);
+        }
+
+        println!("{:?}", table.cap());
+    }
+
+    #[test]
+    fn filter() {
+        let mut table = Table::new();
+
+        for each in 0..200 {
+            table.insert_new::<usize>(each);
+        }
+
+        for each in 200..2000 {
+            table.insert_new::<usize>(each);
+        }
+
+        for each in 0..2000 {
+            if each % 2 == 0 {
+                table.insert_at::<i32>(each, each as i32).unwrap();
+            }
+        }
+
+        let thing = table.query_with_filter::<usize>(!Filter::NULL);
+        println!("{:?}", thing);
+    }
+
+    #[test]
+    fn iter_empty() {
+        let mut thing: IterMut<usize> = IterMut::new_empty();
+        println!("{:?}", thing);
+
+        assert!(thing.next().is_none());
     }
 }
