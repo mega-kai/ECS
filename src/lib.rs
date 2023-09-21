@@ -10,8 +10,8 @@
 
 // todo, thread safety, meaning all that access to anything within table shouldn't cause data race
 // preferably using atomics???
+// todo. should lock up the table when the saving just begins, unlock after all the stuff is done
 
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
@@ -877,7 +877,6 @@ impl Table {
         )
     }
 
-    // todo. should lock up the table when the saving just begins, unlock after all the stuff is done
     pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
         &self,
     ) -> Result<SavedColumn<'a, C>, &'static str> {
@@ -1030,13 +1029,13 @@ impl Table {
 }
 
 pub struct SavedColumn<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> {
-    sparse: String,
-    dense: String,
-    dense_sparse: String,
+    pub sparse: String,
+    pub dense: String,
+    pub dense_sparse: String,
 
     _phantom: PhantomData<&'a C>,
 }
-// todo what if we remove static from all components
+
 impl<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> SavedColumn<'a, C> {
     fn new(sparse: String, dense: String, dense_sparse: String) -> Self {
         Self {
@@ -1221,7 +1220,8 @@ mod test {
         }
         // println!("{:?}", counter);
 
-        // todo valgrind this whole saving thing
+        // todo valgrind this whole saving thing, im assuming it's not that bad consider it's all using
+        // the default allocator
     }
 
     #[test]
