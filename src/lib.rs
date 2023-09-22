@@ -12,6 +12,8 @@
 // preferably using atomics???
 // todo. should lock up the table when the saving just begins, unlock after all the stuff is done
 
+// todo, access itself can read into same row with type info, returning an option
+
 use serde::{Deserialize, Serialize};
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
@@ -506,7 +508,6 @@ impl Buffers {
             if self.buffer_status_column[index] == BufferStatus::Vacant {
                 self.buffer_status_column[index] = BufferStatus::Taken;
                 return Some(BufferIndex::Index(index));
-                break;
             }
         }
         None
@@ -619,7 +620,7 @@ impl Table {
         let left_simd = self.buffers[left].as_simd();
         let right_simd = self.buffers[right].as_simd();
 
-        let mut write_buffer_index = if let Some(val) = self.buffers.get_index() {
+        let write_buffer_index = if let Some(val) = self.buffers.get_index() {
             val
         } else {
             self.buffers.new_buffer(self.cap())
@@ -658,7 +659,7 @@ impl Table {
             Node::Single(invert_flag, id_index) => {
                 match self.table.get(&filter.ids[*id_index as usize]) {
                     Some((sparse_column, _)) => {
-                        let mut buffer_index = if let Some(val) = self.buffers.get_index() {
+                        let buffer_index = if let Some(val) = self.buffers.get_index() {
                             val
                         } else {
                             self.buffers.new_buffer(self.cap())
@@ -823,7 +824,9 @@ impl Table {
             Ok(())
         }
     }
-    pub fn read_state<C: 'static + Sized>(&mut self) -> Result<&mut C, &'static str> {
+
+    // todo consider make the access more thread safe???
+    pub fn read_state<'a, 'b, C: 'static + Sized>(&'a mut self) -> Result<&'b mut C, &'static str> {
         if let Some(state) = self.states.get_mut(&type_id::<C>()) {
             Ok(unsafe { state.ptr.cast::<C>().as_mut().unwrap() })
         } else {
@@ -846,13 +849,19 @@ impl Table {
         }
     }
 
-    /// only for IterMut
-    unsafe fn read_raw<'a, 'b, C: 'static + Sized>(
-        &'a self,
-        sparse_index: SparseIndex,
-    ) -> &'b mut C {
-        let (sparse_column, dense_column) = self.table.get(&type_id::<C>()).unwrap();
-        &mut dense_column.as_slice::<C>()[sparse_column.as_slice()[sparse_index] & MASK_TAIL]
+    fn read_direct<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> Option<Access<C>> {
+        let (sparse_column, dense_column) = self.table.get(&type_id::<C>())?;
+        if sparse_index >= self.cap() || sparse_index == 0 {
+            return None;
+        }
+        let mut dense_index = sparse_column.as_slice()[sparse_index];
+        if dense_index == 0 {
+            return None;
+        }
+        dense_index &= MASK_TAIL;
+        let ptr = &mut dense_column.as_slice::<C>()[dense_index];
+
+        Some(Access::new(ptr, self, sparse_index))
     }
 
     pub fn query_with_filter<C: 'static + Sized>(&mut self, filter: Filter) -> IterMut<C> {
@@ -870,14 +879,10 @@ impl Table {
         }
         let result_buffer_slice = self.buffers[result_index].as_slice(); // [..largest_occupied_sparse_index]
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
-        IterMut::new(
-            result_buffer_slice.as_mut_ptr_range(),
-            &self,
-            self.current_tick,
-        )
+        IterMut::new(result_buffer_slice.as_mut_ptr_range(), self)
     }
 
-    pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
+    pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a>>(
         &self,
     ) -> Result<SavedColumn<'a, C>, &'static str> {
         let (sparse_col, dense_col) = self
@@ -913,7 +918,7 @@ impl Table {
         }
     }
 
-    pub fn load_column<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug>(
+    pub fn load_column<'a, C: 'static + Sized + Serialize + Deserialize<'a>>(
         &mut self,
         saved_data: &'a SavedColumn<'a, C>,
     ) -> Result<(), &'static str> {
@@ -1028,7 +1033,7 @@ impl Table {
     }
 }
 
-pub struct SavedColumn<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> {
+pub struct SavedColumn<'a, C: 'static + Sized + Serialize + Deserialize<'a>> {
     pub sparse: String,
     pub dense: String,
     pub dense_sparse: String,
@@ -1036,7 +1041,7 @@ pub struct SavedColumn<'a, C: 'static + Sized + Serialize + Deserialize<'a> + De
     _phantom: PhantomData<&'a C>,
 }
 
-impl<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> SavedColumn<'a, C> {
+impl<'a, C: 'static + Sized + Serialize + Deserialize<'a>> SavedColumn<'a, C> {
     fn new(sparse: String, dense: String, dense_sparse: String) -> Self {
         Self {
             sparse,
@@ -1054,7 +1059,7 @@ impl<'a, C: 'static + Sized + Serialize + Deserialize<'a> + Debug> SavedColumn<'
 // so maybe add marker for each tick and after each change is done to the respective column,
 // that way you can even make this copy, provided that all changing are from the api that would update these
 // indices
-pub struct IterMut<'a, C: 'static + Sized> {
+pub struct IterMut<C: 'static + Sized> {
     ptr: *mut usize,
     end: *mut usize,
 
@@ -1065,9 +1070,9 @@ pub struct IterMut<'a, C: 'static + Sized> {
 
     table: *const Table,
 
-    _phan: PhantomData<&'a C>,
+    _phan: PhantomData<C>,
 }
-impl<'a, C: 'static + Sized> Debug for IterMut<'a, C> {
+impl<'a, C: 'static + Sized> Debug for IterMut<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.ptr.is_null() {
             f.debug_list().entry(&"empty").finish()
@@ -1080,12 +1085,12 @@ impl<'a, C: 'static + Sized> Debug for IterMut<'a, C> {
         }
     }
 }
-impl<'a, C: 'static + Sized> IterMut<'a, C> {
-    fn new(range: Range<*mut usize>, table: &Table, tick_index: Wrapping<usize>) -> Self {
+impl<C: 'static + Sized> IterMut<C> {
+    fn new(range: Range<*mut usize>, table: &Table) -> Self {
         Self {
             ptr: range.start,
             end: range.end,
-            tick_index,
+            tick_index: table.current_tick,
             op_index: Wrapping(0),
             table,
             _phan: PhantomData,
@@ -1103,9 +1108,8 @@ impl<'a, C: 'static + Sized> IterMut<'a, C> {
         }
     }
 }
-impl<'a, C: 'static + Sized> Iterator for IterMut<'a, C> {
-    type Item = &'a mut C;
-    // type Item = SparseIndex;
+impl<C: 'static + Sized> Iterator for IterMut<C> {
+    type Item = Access<C>;
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
@@ -1122,14 +1126,45 @@ impl<'a, C: 'static + Sized> Iterator for IterMut<'a, C> {
                     let index = *self.ptr;
                     self.ptr = self.ptr.add(1);
 
-                    let thing = (*self.table).read_raw::<C>(index);
-                    return Some(thing);
-                    // return Some(index);
+                    (*self.table).read_direct::<C>(index)
                 } else {
                     return None;
                 }
             }
         }
+    }
+}
+
+pub struct Access<C: 'static + Sized> {
+    ptr: *mut C,
+    sparse_index: SparseIndex,
+    table: *const Table,
+}
+
+impl<C: 'static + Sized> Access<C> {
+    fn new(ptr: &mut C, table: &Table, sparse_index: SparseIndex) -> Self {
+        Self {
+            ptr,
+            table,
+            sparse_index,
+        }
+    }
+
+    pub fn access<T: 'static + Sized>(&self) -> Option<Access<T>> {
+        unsafe { (*self.table).read_direct::<T>(self.sparse_index) }
+    }
+}
+
+impl<C: 'static + Sized> Deref for Access<C> {
+    type Target = C;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.ptr.as_mut().unwrap() }
+    }
+}
+impl<C: 'static + Sized> DerefMut for Access<C> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.ptr.as_mut().unwrap() }
     }
 }
 
@@ -1158,7 +1193,7 @@ impl ECS {
 mod test {
     use super::*;
 
-    #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+    #[derive(Serialize, Deserialize, Clone, Copy)]
     struct MyStruct {
         // unfortunately you would have to avoid using &str in any components if you still wanna save them...
         float: f32,
@@ -1288,5 +1323,27 @@ mod test {
         println!("{:?}", thing);
 
         assert!(thing.next().is_none());
+    }
+
+    #[test]
+    fn access() {
+        let mut ecs = ECS::new(|_| {});
+
+        for each in 1..=20000 {
+            ecs.table.insert_new::<usize>(each);
+            ecs.table.insert_at::<isize>(each, each as isize).unwrap();
+        }
+        // println!("{:?}", table.cap());
+        // println!("{:?}", table.read_direct::<usize>(0));
+
+        for mut each in ecs
+            .table
+            .query_with_filter::<usize>(Filter::from::<isize>())
+        {
+            *each += 1;
+            let mut thing = each.access::<isize>().unwrap();
+            // *thing += 1;
+            println!("{:?}", *thing);
+        }
     }
 }
