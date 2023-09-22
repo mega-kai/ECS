@@ -1168,6 +1168,18 @@ impl<C: 'static + Sized> DerefMut for Access<C> {
     }
 }
 
+impl<C: 'static + Sized> AsRef<C> for Access<C> {
+    fn as_ref(&self) -> &C {
+        self.deref()
+    }
+}
+
+impl<C: 'static + Sized> AsMut<C> for Access<C> {
+    fn as_mut(&mut self) -> &mut C {
+        self.deref_mut()
+    }
+}
+
 //-----------------ECS-----------------//
 pub struct ECS {
     pub table: Table,
