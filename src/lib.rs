@@ -8,11 +8,26 @@
 )]
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd)]
 
+// todo, table can insert &'static tags, which is essentially zst, and can query it directly
+// or with other comps, tags don't contain additional data, and are case insensitive.
+// we either resolve (together with typeid) to a unique u128, or we seperate them in two tables
+
+// todo a macro that makes deriving all the serde traits easy with simple types
+
+// todo additional save functions to handle tags, in a chained up structure:
+// table.save::<usize>()?.save::<isize>()?.finish(); where finish() would save both tags and metadata
+
+// todo, filter macro: fil!((NULL & "TAG") ^ !SomeType);
+
+// todo, macro that makes deriving all the serde traits easy with simple types, types that
+// need manual impl will show an error
+
+// todo, i feel like having a trait that defines all the api and then have a
+// structure that implements all this api is like the better way of doing things??
+
 // todo, thread safety, meaning all that access to anything within table shouldn't cause data race
 // preferably using atomics???
-// todo. should lock up the table when the saving just begins, unlock after all the stuff is done
-
-// todo, access itself can read into same row with type info, returning an option
+// todo, should lock up the table when the saving just begins, unlock after all the stuff is done
 
 use serde::{Deserialize, Serialize};
 use std::alloc::{alloc, dealloc, realloc};
@@ -42,6 +57,14 @@ const SIMD_START: Simd<usize, 64> = Simd::from_array([
 
 const SHIFT: Simd<usize, 64> = Simd::from_array([63; 64]);
 const ONE: Simd<usize, 64> = Simd::from_array([1; 64]);
+
+fn process_string(str: &str) -> Result<String, &'static str> {
+    if str.is_empty() {
+        return Err("empty tag not allowed");
+    }
+    let string = str.trim().to_lowercase();
+    Ok(string)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BufferIndex {
@@ -298,6 +321,7 @@ struct DenseColumn {
     layout: Layout,
 }
 impl DenseColumn {
+    // todo do not allocate for zst, that means we might need to change save/load functions
     fn new<C: 'static + Sized>() -> Self {
         let layout = Layout::new::<C>();
         if layout.size() > 0 {
@@ -539,6 +563,8 @@ pub struct Table {
     buffers: Buffers,
 
     table: HashMap<TypeId, (Column, DenseColumn)>,
+    tag_table: HashMap<String, Column>,
+
     states: HashMap<TypeId, State>,
 }
 
@@ -548,6 +574,7 @@ impl Table {
             freehead: 1,
 
             table: HashMap::new(),
+            tag_table: HashMap::new(),
             states: HashMap::new(),
 
             current_tick: Wrapping(0),
@@ -1153,6 +1180,10 @@ impl<C: 'static + Sized> Access<C> {
     pub fn access<T: 'static + Sized>(&self) -> Option<Access<T>> {
         unsafe { (*self.table).read_direct::<T>(self.sparse_index) }
     }
+
+    // pub fn deref_mut<'a, 'b>(&'a self) -> &'b mut C {
+    //     unsafe { self.ptr.as_mut().unwrap() }
+    // }
 }
 
 impl<C: 'static + Sized> Deref for Access<C> {
@@ -1344,6 +1375,7 @@ mod test {
         for each in 1..=20000 {
             ecs.table.insert_new::<usize>(each);
             ecs.table.insert_at::<isize>(each, each as isize).unwrap();
+            // ecs.table.insert_tag("this").unwrap();
         }
         // println!("{:?}", table.cap());
         // println!("{:?}", table.read_direct::<usize>(0));
