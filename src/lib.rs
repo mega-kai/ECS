@@ -6,7 +6,7 @@
     unused_assignments,
     unused_imports
 )]
-#![feature(alloc_layout_extra, core_intrinsics, portable_simd)]
+#![feature(alloc_layout_extra, core_intrinsics, portable_simd, const_type_id)]
 
 // todo, table can insert &'static tags, which is essentially zst, and can query it directly
 // or with other comps, tags don't contain additional data, and are case insensitive.
@@ -107,7 +107,7 @@ pub struct Filter {
     ids: [TypeId; NUM_OF_NODES],
 }
 impl Filter {
-    pub fn from<C: Sized + 'static>() -> Self {
+    pub const fn from<C: Sized + 'static>() -> Self {
         let mut thing = Self {
             num_of_nodes: 1,
             num_of_ids: 1,
@@ -118,6 +118,10 @@ impl Filter {
         // first node would be the root node
         thing.nodes[0] = Some(Node::Single(false, 0));
         thing
+    }
+
+    pub const fn from_tag(tag: &str) -> Self {
+        todo!()
     }
 
     fn combine(mut first: Self, second: Self, op: Operation) -> Self {
@@ -735,17 +739,19 @@ impl Table {
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
     }
-    /// the lifetime isn't locked
-    pub unsafe fn read_column_raw<'a, 'b, C: 'static + Sized>(
-        &'a self,
-    ) -> Result<&'b [C], &'static str> {
-        match self.table.get(&type_id::<C>()) {
-            Some((_, dense_column)) => Ok(dense_column.as_slice()),
-            None => Err("type not in table"),
-        }
-    }
 
-    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> SparseIndex {
+    /// the lifetime isn't locked
+    // pub unsafe fn read_column_raw<'a, 'b, C: 'static + Sized>(
+    //     &'a self,
+    // ) -> Result<&'b [C], &'static str> {
+    //     match self.table.get(&type_id::<C>()) {
+    //         Some((_, dense_column)) => Ok(dense_column.as_slice()),
+    //         None => Err("type not in table"),
+    //     }
+    // }
+
+    // todo i want tag and rest share this same api
+    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
         let sparse_index = self.freehead;
 
         for each in sparse_index + 1..self.cap() {
@@ -767,19 +773,22 @@ impl Table {
             .entry(type_id::<C>())
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
 
-        let (dense_index, _) = targe_dense.push(value, sparse_index);
+        let (dense_index, ptr) = targe_dense.push(value, sparse_index);
         target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
         targe_dense.as_sparse_slice()[dense_index] = sparse_index;
 
         self.num_of_comp_column.as_slice()[sparse_index] += 1;
 
-        sparse_index
+        Access::new(ptr, self, sparse_index)
     }
+
     pub fn insert_at<C: 'static + Sized>(
         &mut self,
-        sparse_index: SparseIndex,
+        access: Access<C>,
         value: C,
     ) -> Result<SparseIndex, &'static str> {
+        let sparse_index = access.sparse_index;
+
         if sparse_index == 0 {
             return Err("sparse index starts from 1");
         }
@@ -803,10 +812,10 @@ impl Table {
             _ => Err("sparse index at this type column is already taken"),
         }
     }
-    pub fn remove<C: 'static + Sized>(
-        &mut self,
-        sparse_index: SparseIndex,
-    ) -> Result<C, &'static str> {
+
+    pub fn remove<C: 'static + Sized>(&mut self, access: Access<C>) -> Result<C, &'static str> {
+        let sparse_index = access.sparse_index;
+
         let (target_sparse, target_dense) = self
             .table
             .get_mut(&type_id::<C>())
@@ -891,9 +900,10 @@ impl Table {
         Some(Access::new(ptr, self, sparse_index))
     }
 
-    pub fn query_with_filter<C: 'static + Sized>(&mut self, filter: Filter) -> IterMut<C> {
+    // todo what if we can only query for a type, but you can filter with tags
+    pub fn query<C: 'static + Sized>(&mut self, filter: Filter) -> Query<C> {
         if filter == !Filter::NULL {
-            return IterMut::new_empty();
+            return Query::new_empty();
         }
         let filter = Filter::from::<C>() & filter;
         // start traversing from root node
@@ -906,7 +916,7 @@ impl Table {
         }
         let result_buffer_slice = self.buffers[result_index].as_slice(); // [..largest_occupied_sparse_index]
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
-        IterMut::new(result_buffer_slice.as_mut_ptr_range(), self)
+        Query::new(result_buffer_slice.as_mut_ptr_range(), self)
     }
 
     pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a>>(
@@ -918,6 +928,7 @@ impl Table {
             .ok_or("no such column in table")?;
 
         unsafe {
+            // this literally does not handle ZST
             let temp_sparse_vec =
                 Vec::from_raw_parts(sparse_col.ptr as *mut usize, sparse_col.cap, sparse_col.cap);
             let temp_dense_vec =
@@ -1080,13 +1091,12 @@ impl<'a, C: 'static + Sized + Serialize + Deserialize<'a>> SavedColumn<'a, C> {
 }
 
 // todo intoiter for IterMut, or at least clone to vec
-
 // todo consider make this type safer, it currently allows you to save it after adding/removing stuff in
 // the respective column, you can also somehow preserve it to the next tick and it still derefs
 // so maybe add marker for each tick and after each change is done to the respective column,
 // that way you can even make this copy, provided that all changing are from the api that would update these
 // indices
-pub struct IterMut<C: 'static + Sized> {
+pub struct Query<C: 'static + Sized> {
     ptr: *mut usize,
     end: *mut usize,
 
@@ -1099,7 +1109,7 @@ pub struct IterMut<C: 'static + Sized> {
 
     _phan: PhantomData<C>,
 }
-impl<'a, C: 'static + Sized> Debug for IterMut<C> {
+impl<'a, C: 'static + Sized> Debug for Query<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.ptr.is_null() {
             f.debug_list().entry(&"empty").finish()
@@ -1112,7 +1122,7 @@ impl<'a, C: 'static + Sized> Debug for IterMut<C> {
         }
     }
 }
-impl<C: 'static + Sized> IterMut<C> {
+impl<C: 'static + Sized> Query<C> {
     fn new(range: Range<*mut usize>, table: &Table) -> Self {
         Self {
             ptr: range.start,
@@ -1135,7 +1145,7 @@ impl<C: 'static + Sized> IterMut<C> {
         }
     }
 }
-impl<C: 'static + Sized> Iterator for IterMut<C> {
+impl<C: 'static + Sized> Iterator for Query<C> {
     type Item = Access<C>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1253,11 +1263,11 @@ mod test {
         // table.remove::<MyStruct>(120).unwrap();
 
         for each in 1..101 {
-            table.insert_at::<usize>(each, each as usize).unwrap();
+            // table.insert_at::<usize>(each, each as usize).unwrap();
         }
 
         for each in 150..201 {
-            table.insert_at::<usize>(each, each as usize).unwrap();
+            // table.insert_at::<usize>(each, each as usize).unwrap();
         }
 
         let data_mystruct = table.save_column::<MyStruct>().unwrap();
@@ -1293,7 +1303,7 @@ mod test {
         //     table.query_with_filter::<MyStruct>(!Filter::from::<usize>())
         // );
         let mut counter = 0;
-        for each in table.query_with_filter::<MyStruct>(Filter::NULL) {
+        for each in table.query::<MyStruct>(Filter::NULL) {
             counter += 1;
         }
         // println!("{:?}", counter);
@@ -1352,17 +1362,17 @@ mod test {
 
         for each in 0..2000 {
             if each % 2 == 0 {
-                table.insert_at::<i32>(each, each as i32).unwrap();
+                // table.insert_at::<i32>(each, each as i32).unwrap();
             }
         }
 
-        let thing = table.query_with_filter::<usize>(!Filter::NULL);
+        let thing = table.query::<usize>(!Filter::NULL);
         println!("{:?}", thing);
     }
 
     #[test]
     fn iter_empty() {
-        let mut thing: IterMut<usize> = IterMut::new_empty();
+        let mut thing: Query<usize> = Query::new_empty();
         println!("{:?}", thing);
 
         assert!(thing.next().is_none());
@@ -1374,20 +1384,66 @@ mod test {
 
         for each in 1..=20000 {
             ecs.table.insert_new::<usize>(each);
-            ecs.table.insert_at::<isize>(each, each as isize).unwrap();
+            // ecs.table.insert_at::<isize>(each, each as isize).unwrap();
             // ecs.table.insert_tag("this").unwrap();
         }
         // println!("{:?}", table.cap());
         // println!("{:?}", table.read_direct::<usize>(0));
 
-        for mut each in ecs
-            .table
-            .query_with_filter::<usize>(Filter::from::<isize>())
-        {
+        for mut each in ecs.table.query::<usize>(Filter::from::<isize>()) {
             *each += 1;
             let mut thing = each.access::<isize>().unwrap();
             // *thing += 1;
             println!("{:?}", *thing);
         }
+    }
+
+    #[test]
+    fn id() {
+        assert!(type_id::<&str>() == type_id::<&str>());
+        // for each in query!(table, UwU, fil!(!"enemy" + Health)) {}
+        // query!(table, "enemy", fil!(NULL));
+        let mut table = Table::new();
+
+        macro_rules! HELLO {
+            // ident is var/func name
+            // ($thing:ident) => {
+            //     println!("hello")
+            // };
+
+            // expr is expression and value
+            ($table:expr, $type_info:ty /*bitwise operators combination of NULL, types and tags; or leave blank for just NULL*/) => {{
+                // println!("{:?} is {:?}", stringify!($thing), $thing);
+                // println!("{:?}", type_id::<$another>());
+                table.query_with_filter::<$type_info>(Filter::NULL)
+            }};
+
+            // AND they don't have to have the same return type
+            ($table:expr, $type_info:ty, $filter:tt) => {{
+                // println!("{:?} is {:?}", stringify!($thing), $thing);
+                // println!("{:?}", type_id::<$another>());
+                // table.query_with_filter::<$type_info>(Filter::NULL)
+                println!("{:?}", $filter)
+            }};
+        }
+
+        let thing = HELLO!(table, MyStruct, 12);
+        // println!("{:?}", thing);
+
+        macro_rules! filter {
+            () => {
+                ()
+            };
+        }
+
+        let foo = filter!();
+
+        macro_rules! recurrence {
+            ( a[n]: $sty:ty = $($inits:expr),+; ..., $recur:expr ) => {
+                /* ... */
+            };
+        }
+
+        recurrence![a[n]: u64 = 0, 1;..., a[n-2] + a[n-1]];
     }
 }
