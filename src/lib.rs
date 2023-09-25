@@ -29,6 +29,7 @@
 // preferably using atomics???
 // todo, should lock up the table when the saving just begins, unlock after all the stuff is done
 
+use arrayvec::ArrayString;
 use serde::{Deserialize, Serialize};
 use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
@@ -45,6 +46,8 @@ use std::{alloc::Layout, fmt::Debug};
 type SparseIndex = usize;
 type DenseIndex = usize;
 type TypeId = u128;
+
+const TAG_SIZE: usize = 128;
 
 const MASK_HEAD: usize = 1 << (usize::BITS - 1);
 const MASK_TAIL: usize = !MASK_HEAD;
@@ -92,7 +95,6 @@ impl Debug for Filter {
             .field("num_of_nodes", &self.num_of_nodes)
             .field("num_of_ids", &self.num_of_ids)
             .field("nodes", &self.nodes)
-            // .field("ids", &self.ids)
             .finish()
     }
 }
@@ -567,7 +569,7 @@ pub struct Table {
     buffers: Buffers,
 
     table: HashMap<TypeId, (Column, DenseColumn)>,
-    tag_table: HashMap<String, Column>,
+    tag_table: HashMap<ArrayString<TAG_SIZE>, Column>,
 
     states: HashMap<TypeId, State>,
 }
@@ -1445,5 +1447,7 @@ mod test {
         }
 
         recurrence![a[n]: u64 = 0, 1;..., a[n-2] + a[n-1]];
+
+        let thing: ArrayString<128> = ArrayString::from("thiss").unwrap();
     }
 }
