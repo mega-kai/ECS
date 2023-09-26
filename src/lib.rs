@@ -10,12 +10,8 @@
 
 // todo, table can insert &'static tags, which is essentially zst, and can query it directly
 // or with other comps, tags don't contain additional data, and are case insensitive.
-// we either resolve (together with typeid) to a unique u128, or we seperate them in two tables
 
 // todo a macro that makes deriving all the serde traits easy with simple types
-
-// todo additional save functions to handle tags, in a chained up structure:
-// table.save::<usize>()?.save::<isize>()?.finish(); where finish() would save both tags and metadata
 
 // todo, filter macro: fil!((NULL & "TAG") ^ !SomeType);
 
@@ -47,7 +43,8 @@ type SparseIndex = usize;
 type DenseIndex = usize;
 type TypeId = u128;
 
-const TAG_SIZE: usize = 128;
+const TAG_SIZE: usize = 16;
+const NUM_OF_NODES: usize = 16;
 
 const MASK_HEAD: usize = 1 << (usize::BITS - 1);
 const MASK_TAIL: usize = !MASK_HEAD;
@@ -99,31 +96,45 @@ impl Debug for Filter {
     }
 }
 
-const NUM_OF_NODES: usize = 16;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IDorTAG {
+    ID(TypeId),
+    TAG(ArrayString<TAG_SIZE>),
+    None,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Filter {
     num_of_nodes: u8,
     num_of_ids: u8,
 
     nodes: [Option<Node>; NUM_OF_NODES],
-    ids: [TypeId; NUM_OF_NODES],
+    ids: [IDorTAG; NUM_OF_NODES],
 }
 impl Filter {
-    pub const fn from<C: Sized + 'static>() -> Self {
+    pub fn from<C: Sized + 'static>() -> Self {
         let mut thing = Self {
             num_of_nodes: 1,
             num_of_ids: 1,
             nodes: [None; NUM_OF_NODES],
-            ids: [0; NUM_OF_NODES],
+            ids: [IDorTAG::None; NUM_OF_NODES],
         };
-        thing.ids[0] = std::intrinsics::type_id::<C>();
+        thing.ids[0] = IDorTAG::ID(std::intrinsics::type_id::<C>());
         // first node would be the root node
         thing.nodes[0] = Some(Node::Single(false, 0));
         thing
     }
 
-    pub const fn from_tag(tag: &str) -> Self {
-        todo!()
+    pub fn from_tag(tag: &str) -> Self {
+        let mut thing = Self {
+            num_of_nodes: 1,
+            num_of_ids: 1,
+            nodes: [None; NUM_OF_NODES],
+            ids: [IDorTAG::None; NUM_OF_NODES],
+        };
+        thing.ids[0] = IDorTAG::TAG(ArrayString::from(tag).unwrap());
+        thing.nodes[0] = Some(Node::Single(false, 0));
+        thing
     }
 
     fn combine(mut first: Self, second: Self, op: Operation) -> Self {
@@ -220,7 +231,7 @@ impl Filter {
         num_of_nodes: 0,
         num_of_ids: 0,
         nodes: [None; NUM_OF_NODES],
-        ids: [0; NUM_OF_NODES],
+        ids: [IDorTAG::None; NUM_OF_NODES],
     };
 }
 impl BitAnd for Filter {
@@ -316,6 +327,7 @@ impl Drop for Column {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct ZST(u8);
 const ZST_LAYOUT: Layout = Layout::new::<ZST>();
 
@@ -690,33 +702,68 @@ impl Table {
     fn filter_traverse(&mut self, node_index: usize, filter: &Filter) -> BufferIndex {
         match &filter.nodes[node_index].unwrap() {
             Node::Single(invert_flag, id_index) => {
-                match self.table.get(&filter.ids[*id_index as usize]) {
-                    Some((sparse_column, _)) => {
-                        let buffer_index = if let Some(val) = self.buffers.get_index() {
-                            val
-                        } else {
-                            self.buffers.new_buffer(self.cap())
-                        };
+                match &filter.ids[*id_index as usize] {
+                    IDorTAG::ID(id) => {
+                        match self.table.get(id) {
+                            Some((sparse_column, _)) => {
+                                let buffer_index = if let Some(val) = self.buffers.get_index() {
+                                    val
+                                } else {
+                                    self.buffers.new_buffer(self.cap())
+                                };
 
-                        let buffer_simd = self.buffers[buffer_index].as_simd();
+                                let buffer_simd = self.buffers[buffer_index].as_simd();
 
-                        buffer_simd.clone_from_slice(&sparse_column.as_simd());
-                        if *invert_flag {
-                            for each in 0..self.cap() / 64 {
-                                buffer_simd[each] = !buffer_simd[each];
+                                buffer_simd.clone_from_slice(&sparse_column.as_simd());
+                                if *invert_flag {
+                                    for each in 0..self.cap() / 64 {
+                                        buffer_simd[each] = !buffer_simd[each];
+                                    }
+                                }
+                                buffer_index
+                            }
+                            None => {
+                                if *invert_flag {
+                                    // this is the ones column
+                                    BufferIndex::ONES
+                                } else {
+                                    // this is the zeros column
+                                    BufferIndex::ZEROS
+                                }
                             }
                         }
-                        buffer_index
                     }
-                    None => {
-                        if *invert_flag {
-                            // this is the ones column
-                            BufferIndex::ONES
-                        } else {
-                            // this is the zeros column
-                            BufferIndex::ZEROS
+                    IDorTAG::TAG(tag) => {
+                        match self.tag_table.get(tag) {
+                            Some(sparse_column) => {
+                                let buffer_index = if let Some(val) = self.buffers.get_index() {
+                                    val
+                                } else {
+                                    self.buffers.new_buffer(self.cap())
+                                };
+
+                                let buffer_simd = self.buffers[buffer_index].as_simd();
+
+                                buffer_simd.clone_from_slice(&sparse_column.as_simd());
+                                if *invert_flag {
+                                    for each in 0..self.cap() / 64 {
+                                        buffer_simd[each] = !buffer_simd[each];
+                                    }
+                                }
+                                buffer_index
+                            }
+                            None => {
+                                if *invert_flag {
+                                    // this is the ones column
+                                    BufferIndex::ONES
+                                } else {
+                                    // this is the zeros column
+                                    BufferIndex::ZEROS
+                                }
+                            }
                         }
                     }
+                    IDorTAG::None => panic!("shouldn't be none at this step"),
                 }
             }
 
@@ -728,6 +775,8 @@ impl Table {
                 self.apply_operation_then_cache(left, right, *invert_flag, *op)
             }
         }
+
+        // todo!()
     }
 
     fn free_all_buffers(&mut self) {
@@ -752,8 +801,7 @@ impl Table {
     //     }
     // }
 
-    // todo i want tag and rest share this same api
-    pub fn insert_new<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
+    pub fn insert<C: 'static + Sized>(&mut self, value: C) -> Access<C> {
         let sparse_index = self.freehead;
 
         for each in sparse_index + 1..self.cap() {
@@ -784,13 +832,11 @@ impl Table {
         Access::new(ptr, self, sparse_index)
     }
 
-    pub fn insert_at<C: 'static + Sized>(
+    fn insert_at<C: 'static + Sized>(
         &mut self,
-        access: Access<C>,
+        sparse_index: SparseIndex,
         value: C,
-    ) -> Result<SparseIndex, &'static str> {
-        let sparse_index = access.sparse_index;
-
+    ) -> Result<Access<C>, &'static str> {
         if sparse_index == 0 {
             return Err("sparse index starts from 1");
         }
@@ -802,22 +848,20 @@ impl Table {
             .or_insert((Column::new(cap), DenseColumn::new::<C>()));
         match target_sparse.as_slice()[sparse_index] {
             0 => {
-                let (dense_index, _) = target_dense.push(value, sparse_index);
+                let (dense_index, ptr) = target_dense.push(value, sparse_index);
                 target_sparse.as_slice()[sparse_index] = dense_index | MASK_HEAD;
 
                 target_dense.as_sparse_slice()[dense_index] = sparse_index;
 
                 self.num_of_comp_column.as_slice()[sparse_index] += 1;
 
-                Ok(sparse_index)
+                Ok(Access::new(ptr, self, sparse_index))
             }
-            _ => Err("sparse index at this type column is already taken"),
+            _ => Err("same type as this position is already present"),
         }
     }
 
-    pub fn remove<C: 'static + Sized>(&mut self, access: Access<C>) -> Result<C, &'static str> {
-        let sparse_index = access.sparse_index;
-
+    fn remove<C: 'static + Sized>(&mut self, sparse_index: SparseIndex) -> Result<C, &'static str> {
         let (target_sparse, target_dense) = self
             .table
             .get_mut(&type_id::<C>())
@@ -887,7 +931,7 @@ impl Table {
         }
     }
 
-    fn read_direct<C: 'static + Sized>(&self, sparse_index: SparseIndex) -> Option<Access<C>> {
+    fn read_direct<C: 'static + Sized>(&mut self, sparse_index: SparseIndex) -> Option<Access<C>> {
         let (sparse_column, dense_column) = self.table.get(&type_id::<C>())?;
         if sparse_index >= self.cap() || sparse_index == 0 {
             return None;
@@ -903,9 +947,12 @@ impl Table {
     }
 
     // todo what if we can only query for a type, but you can filter with tags
-    pub fn query<C: 'static + Sized>(&mut self, filter: Filter) -> Query<C> {
+    pub fn query<C: 'static + Sized>(&mut self, filter: Filter) -> Result<Query<C>, &'static str> {
+        if Layout::new::<C>().size() == 0 {
+            return Err("you can't query ZST as target, pls use them as side filters");
+        }
         if filter == !Filter::NULL {
-            return Query::new_empty();
+            return Ok(Query::new_empty());
         }
         let filter = Filter::from::<C>() & filter;
         // start traversing from root node
@@ -918,7 +965,7 @@ impl Table {
         }
         let result_buffer_slice = self.buffers[result_index].as_slice(); // [..largest_occupied_sparse_index]
         result_buffer_slice.sort_unstable_by(|a, b| b.cmp(a));
-        Query::new(result_buffer_slice.as_mut_ptr_range(), self)
+        Ok(Query::new(result_buffer_slice.as_mut_ptr_range(), self))
     }
 
     pub fn save_column<'a, C: 'static + Sized + Serialize + Deserialize<'a>>(
@@ -930,11 +977,9 @@ impl Table {
             .ok_or("no such column in table")?;
 
         unsafe {
-            // this literally does not handle ZST
             let temp_sparse_vec =
                 Vec::from_raw_parts(sparse_col.ptr as *mut usize, sparse_col.cap, sparse_col.cap);
-            let temp_dense_vec =
-                Vec::from_raw_parts(dense_col.ptr as *mut C, dense_col.len, dense_col.cap);
+
             let temp_dense_sparse_vec = Vec::from_raw_parts(
                 dense_col.sparse_ptr as *mut usize,
                 dense_col.len,
@@ -944,17 +989,31 @@ impl Table {
             let sparse = serde_json::to_string::<Vec<usize>>(&temp_sparse_vec)
                 .ok()
                 .ok_or("err during serializing sparse")?;
-            let dense = serde_json::to_string::<Vec<C>>(&temp_dense_vec)
-                .ok()
-                .ok_or("err during serializing dense")?;
+
             let dense_sparse = serde_json::to_string::<Vec<usize>>(&temp_dense_sparse_vec)
                 .ok()
                 .ok_or("err during serializing dense")?;
 
             temp_sparse_vec.leak();
-            temp_dense_vec.leak();
             temp_dense_sparse_vec.leak();
-            Ok(SavedColumn::new(sparse, dense, dense_sparse))
+
+            if Layout::new::<C>().size() == 0 {
+                let temp_dense_vec =
+                    Vec::from_raw_parts(dense_col.ptr as *mut ZST, dense_col.len, dense_col.cap);
+                let dense = serde_json::to_string::<Vec<ZST>>(&temp_dense_vec)
+                    .ok()
+                    .ok_or("err during serializing dense")?;
+                temp_dense_vec.leak();
+                return Ok(SavedColumn::new(sparse, dense, dense_sparse));
+            } else {
+                let temp_dense_vec =
+                    Vec::from_raw_parts(dense_col.ptr as *mut C, dense_col.len, dense_col.cap);
+                let dense = serde_json::to_string::<Vec<C>>(&temp_dense_vec)
+                    .ok()
+                    .ok_or("err during serializing dense")?;
+                temp_dense_vec.leak();
+                return Ok(SavedColumn::new(sparse, dense, dense_sparse));
+            };
         }
     }
 
@@ -966,7 +1025,7 @@ impl Table {
             return Err("type already in table");
         } else {
             let first = serde_json::from_str::<Vec<usize>>(&saved_data.sparse).unwrap();
-            let second = serde_json::from_str::<Vec<C>>(&saved_data.dense).unwrap();
+
             let third = serde_json::from_str::<Vec<usize>>(&saved_data.dense_sparse).unwrap();
 
             assert!(
@@ -987,21 +1046,29 @@ impl Table {
                 ptr: first.leak().as_ptr() as _,
             };
 
-            let len = second.len();
-            // handle zst
-            let dense_col = DenseColumn {
-                sparse_ptr: third.leak().as_ptr() as _,
-                len,
-                cap: second.capacity(),
-                layout: if Layout::new::<C>().size() == 0 {
-                    ZST_LAYOUT
-                } else {
-                    Layout::new::<C>()
-                },
-                ptr: second.leak().as_ptr() as _,
-            };
+            if Layout::new::<C>().size() == 0 {
+                let second = serde_json::from_str::<Vec<ZST>>(&saved_data.dense).unwrap();
+                let dense_col = DenseColumn {
+                    sparse_ptr: third.leak().as_ptr() as _,
+                    len: second.len(),
+                    cap: second.capacity(),
+                    layout: ZST_LAYOUT,
+                    ptr: second.leak().as_ptr() as _,
+                };
 
-            self.table.insert(type_id::<C>(), (sparse_col, dense_col));
+                self.table.insert(type_id::<C>(), (sparse_col, dense_col));
+            } else {
+                let second = serde_json::from_str::<Vec<C>>(&saved_data.dense).unwrap();
+                let dense_col = DenseColumn {
+                    sparse_ptr: third.leak().as_ptr() as _,
+                    len: second.len(),
+                    cap: second.capacity(),
+                    layout: Layout::new::<C>(),
+                    ptr: second.leak().as_ptr() as _,
+                };
+
+                self.table.insert(type_id::<C>(), (sparse_col, dense_col));
+            };
 
             Ok(())
         }
@@ -1071,6 +1138,46 @@ impl Table {
 
         Ok(())
     }
+
+    fn add_tag(&mut self, str: &str, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        let cap = self.cap();
+        let col = self
+            .tag_table
+            .entry(ArrayString::from(str).unwrap())
+            .or_insert(Column::new(cap));
+
+        if col.as_slice()[sparse_index] == 0 {
+            col.as_slice()[sparse_index] = !0;
+            return Ok(());
+        } else {
+            return Err("tag already in this position");
+        }
+    }
+
+    fn remove_tag(&mut self, str: &str, sparse_index: SparseIndex) -> Result<(), &'static str> {
+        if let Some(col) = self.tag_table.get_mut(str) {
+            if col.as_slice()[sparse_index] == 0 {
+                Err("tag is in table but not in this position")
+            } else {
+                col.as_slice()[sparse_index] = 0;
+                Ok(())
+            }
+        } else {
+            Err("this tag is not in table")
+        }
+    }
+
+    fn has_tag(&self, str: &str, sparse_index: SparseIndex) -> bool {
+        if let Some(col) = self.tag_table.get(str) {
+            if col.as_slice()[sparse_index] == 0 {
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    }
 }
 
 pub struct SavedColumn<'a, C: 'static + Sized + Serialize + Deserialize<'a>> {
@@ -1092,12 +1199,7 @@ impl<'a, C: 'static + Sized + Serialize + Deserialize<'a>> SavedColumn<'a, C> {
     }
 }
 
-// todo intoiter for IterMut, or at least clone to vec
-// todo consider make this type safer, it currently allows you to save it after adding/removing stuff in
-// the respective column, you can also somehow preserve it to the next tick and it still derefs
-// so maybe add marker for each tick and after each change is done to the respective column,
-// that way you can even make this copy, provided that all changing are from the api that would update these
-// indices
+// this absolutely does not handle ZST
 pub struct Query<C: 'static + Sized> {
     ptr: *mut usize,
     end: *mut usize,
@@ -1107,7 +1209,7 @@ pub struct Query<C: 'static + Sized> {
     tick_index: Wrapping<usize>,
     op_index: Wrapping<usize>,
 
-    table: *const Table,
+    table: *mut Table,
 
     _phan: PhantomData<C>,
 }
@@ -1125,7 +1227,7 @@ impl<'a, C: 'static + Sized> Debug for Query<C> {
     }
 }
 impl<C: 'static + Sized> Query<C> {
-    fn new(range: Range<*mut usize>, table: &Table) -> Self {
+    fn new(range: Range<*mut usize>, table: &mut Table) -> Self {
         Self {
             ptr: range.start,
             end: range.end,
@@ -1177,11 +1279,11 @@ impl<C: 'static + Sized> Iterator for Query<C> {
 pub struct Access<C: 'static + Sized> {
     ptr: *mut C,
     sparse_index: SparseIndex,
-    table: *const Table,
+    table: *mut Table,
 }
 
 impl<C: 'static + Sized> Access<C> {
-    fn new(ptr: &mut C, table: &Table, sparse_index: SparseIndex) -> Self {
+    fn new(ptr: &mut C, table: &mut Table, sparse_index: SparseIndex) -> Self {
         Self {
             ptr,
             table,
@@ -1193,9 +1295,25 @@ impl<C: 'static + Sized> Access<C> {
         unsafe { (*self.table).read_direct::<T>(self.sparse_index) }
     }
 
-    // pub fn deref_mut<'a, 'b>(&'a self) -> &'b mut C {
-    //     unsafe { self.ptr.as_mut().unwrap() }
-    // }
+    pub fn insert<T: 'static + Sized>(&mut self, val: T) -> Result<Access<T>, &'static str> {
+        unsafe { Ok((*(self.table)).insert_at::<T>(self.sparse_index, val)?) }
+    }
+
+    pub fn remove<T: 'static + Sized>(&mut self) -> Result<T, &'static str> {
+        unsafe { Ok((*self.table).remove::<T>(self.sparse_index)?) }
+    }
+
+    pub fn add_tag(&self, str: &str) -> Result<(), &'static str> {
+        unsafe { Ok((*self.table).add_tag(str, self.sparse_index)?) }
+    }
+
+    pub fn remove_tag(&mut self, str: &str) -> Result<(), &'static str> {
+        unsafe { Ok((*self.table).remove_tag(str, self.sparse_index)?) }
+    }
+
+    pub fn has_tag(&self, str: &str) -> bool {
+        unsafe { (*self.table).has_tag(str, self.sparse_index) }
+    }
 }
 
 impl<C: 'static + Sized> Deref for Access<C> {
@@ -1259,7 +1377,7 @@ mod test {
         let mut table = Table::new();
 
         for each in 0..200 {
-            table.insert_new(MyStruct { float: each as _ });
+            table.insert(MyStruct { float: each as _ });
         }
 
         // table.remove::<MyStruct>(120).unwrap();
@@ -1287,7 +1405,7 @@ mod test {
         // println!("{:?}", table.freehead);
 
         for each in 200..1000 {
-            table.insert_new(MyStruct { float: each as _ });
+            table.insert(MyStruct { float: each as _ });
         }
         // println!(
         //     "{:?}",
@@ -1305,7 +1423,7 @@ mod test {
         //     table.query_with_filter::<MyStruct>(!Filter::from::<usize>())
         // );
         let mut counter = 0;
-        for each in table.query::<MyStruct>(Filter::NULL) {
+        for each in table.query::<MyStruct>(Filter::NULL).unwrap() {
             counter += 1;
         }
         // println!("{:?}", counter);
@@ -1344,7 +1462,7 @@ mod test {
         let mut table = Table::new();
 
         for each in 0..200000 {
-            table.insert_new::<usize>(each);
+            table.insert::<usize>(each);
         }
 
         println!("{:?}", table.cap());
@@ -1355,11 +1473,11 @@ mod test {
         let mut table = Table::new();
 
         for each in 0..200 {
-            table.insert_new::<usize>(each);
+            table.insert::<usize>(each);
         }
 
         for each in 200..2000 {
-            table.insert_new::<usize>(each);
+            table.insert::<usize>(each);
         }
 
         for each in 0..2000 {
@@ -1385,14 +1503,14 @@ mod test {
         let mut ecs = ECS::new(|_| {});
 
         for each in 1..=20000 {
-            ecs.table.insert_new::<usize>(each);
+            ecs.table.insert::<usize>(each);
             // ecs.table.insert_at::<isize>(each, each as isize).unwrap();
             // ecs.table.insert_tag("this").unwrap();
         }
         // println!("{:?}", table.cap());
         // println!("{:?}", table.read_direct::<usize>(0));
 
-        for mut each in ecs.table.query::<usize>(Filter::from::<isize>()) {
+        for mut each in ecs.table.query::<usize>(Filter::from::<isize>()).unwrap() {
             *each += 1;
             let mut thing = each.access::<isize>().unwrap();
             // *thing += 1;
@@ -1448,6 +1566,42 @@ mod test {
 
         recurrence![a[n]: u64 = 0, 1;..., a[n-2] + a[n-1]];
 
-        let thing: ArrayString<128> = ArrayString::from("thiss").unwrap();
+        // let thing: ArrayString<128> = ArrayString::from("thiss").unwrap();
+    }
+
+    struct Thing {}
+    impl Thing {
+        fn hello(&self) {}
+    }
+
+    #[test]
+    fn zst() {
+        let mut table = Table::new();
+
+        for each in 0..10 {
+            let mut acc = table.insert(Thing {});
+            acc.insert(each as usize).unwrap();
+            acc.insert(each as isize).unwrap();
+        }
+
+        // let (thing, _) = table.table.get(&type_id::<Thing>()).unwrap();
+        // println!("{:?}", thing.as_slice());
+
+        // assert!(
+        //     table
+        //         .query::<usize>(Filter::from::<Thing>())
+        //         .unwrap()
+        //         .next()
+        //         .is_none()
+        //         == true
+        // );
+
+        for mut each in table.query::<isize>(Filter::from::<Thing>()).unwrap() {
+            println!("yip {:?}", each.remove::<usize>().unwrap());
+        }
+
+        for mut each in table.query::<isize>(Filter::from::<Thing>()).unwrap() {
+            println!("yip {:?}", each.remove::<usize>().unwrap());
+        }
     }
 }
