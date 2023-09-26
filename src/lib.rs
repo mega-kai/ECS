@@ -1579,29 +1579,37 @@ mod test {
         let mut table = Table::new();
 
         for each in 0..10 {
-            let mut acc = table.insert(Thing {});
-            acc.insert(each as usize).unwrap();
-            acc.insert(each as isize).unwrap();
+            let mut acc = table.insert(each as usize);
+            acc.add_tag("yip").unwrap();
         }
 
-        // let (thing, _) = table.table.get(&type_id::<Thing>()).unwrap();
-        // println!("{:?}", thing.as_slice());
+        for mut each in table.query::<usize>(Filter::from_tag("yip")).unwrap() {
+            println!("{:?}", *each);
+            if each.has_tag("yip") {
+                println!("tag is in table uwu");
+                if *each % 2 == 0 {
+                    each.remove_tag("yip").unwrap();
+                }
+            }
+        }
 
         // assert!(
         //     table
-        //         .query::<usize>(Filter::from::<Thing>())
+        //         .query::<usize>(Filter::from_tag("yip"))
         //         .unwrap()
         //         .next()
         //         .is_none()
         //         == true
         // );
 
-        for mut each in table.query::<isize>(Filter::from::<Thing>()).unwrap() {
-            println!("yip {:?}", each.remove::<usize>().unwrap());
-        }
-
-        for mut each in table.query::<isize>(Filter::from::<Thing>()).unwrap() {
-            println!("yip {:?}", each.remove::<usize>().unwrap());
+        for mut each in table.query::<usize>(!Filter::from_tag("yip")).unwrap() {
+            println!("{:?}", *each);
+            // if each.has_tag("yip") {
+            //     println!("tag is in table uwu");
+            //     if *each % 2 == 0 {
+            //         each.remove_tag("yip").unwrap();
+            //     }
+            // }
         }
     }
 }
