@@ -4,9 +4,11 @@
     unreachable_code,
     unused_mut,
     unused_assignments,
-    unused_imports
+    unused_imports,
+    unused_must_use
 )]
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd, const_type_id)]
+#![recursion_limit = "64"]
 
 // todo, table can insert &'static tags, which is essentially zst, and can query it directly
 // or with other comps, tags don't contain additional data, and are case insensitive.
@@ -1362,6 +1364,97 @@ impl ECS {
     }
 }
 
+// ($typ1:tt ^ $typ2:tt) => {
+//     type_id::<$typ1>() ^ type_id::<$typ2>()
+// };
+// ($typ1:tt | $typ2:tt) => {
+//     type_id::<$typ1>() | type_id::<$typ2>()
+// };
+// ($typ1:tt ^ $($typ2:tt)*)=>{
+//     type_id::<$typ1>() ^ fil!($($typ2)*)
+// };
+// ($typ1:tt | $($typ2:tt)*)=>{
+//     type_id::<$typ1>() | fil!($($typ2)*)
+// };
+
+macro_rules! fil_after {
+    // path can be used for traits and structs/enums
+    ($type:path) => {
+        type_id::<$type>()
+    };
+
+    (($($type:tt)*)) => {
+        fil_after!($($type)*)
+    };
+
+    // recursion stuff
+    ($type1:tt & $($type2:tt)* ) => {
+        fil_after!($type1) & fil_after!($($type2)*)
+    };
+    ($type1:tt ^ $($type2:tt)* ) => {
+        fil_after!($type1) ^ fil_after!($($type2)*)
+    };
+    ($type1:tt | $($type2:tt)* ) => {
+        fil_after!($type1) | fil_after!($($type2)*)
+    };
+}
+
+// this makes things respect precedence
+macro_rules! fil {
+    ($type:ty) => {
+        ()
+    }; // path can be used for traits and structs/enums
+       // ($type:path) => {
+       //     $type
+       // };
+
+       // (($($type:tt)*)) => {
+       //     fil_after!($($type)*)
+       // };
+
+       // recursion stuff
+       // ($type1:tt & $($type2:tt)* ) => {
+       //     fil_after!($type1) & fil_after!($($type2)*)
+       // };
+       // ($type1:tt ^ $($type2:tt)* ) => {
+       //     fil_after!($type1) ^ fil_after!($($type2)*)
+       // };
+       // ($type1:tt | $($type2:tt)* ) => {
+       //     fil_after!($type1) | fil_after!($($type2)*)
+       // };
+       // ($type1:tt & $type2:tt) => {
+       //     fil!($type1) & fil!($type2)
+       // };
+       // ($type1:tt ^ $type2:tt) => {
+       //     fil!($type1) ^ fil!($type2)
+       // };
+       // ($type1:tt | $type2:tt) => {
+       //     fil!($type1) | fil!($type2)
+       // };
+
+       // ($($type1:tt)+ & $type2:tt) => {
+       //     fil!($type1) & fil!($type2)
+       // };
+}
+
+fn test_mac_pls() {
+    // fil!(&)
+    // have to turn this
+    // fil!(usize & isize ^ u32) | i32);
+    // into this
+    // fil_after!(((usize & isize) ^ u32) | i32);
+
+    // have to turn this
+    // fil!(usize & isize & u32) & i32);
+    // into this
+    // fil_after!(((usize & isize) & u32) & i32);
+
+    // have to turn this
+    // fil_after!(usize & isize | u32 & i32);
+    // into this
+    // fil_after!((usize & (isize | u32)) ^ i32);
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1611,5 +1704,21 @@ mod test {
             //     }
             // }
         }
+    }
+
+    #[test]
+    fn macr() {
+        let i32_id = type_id::<i32>();
+        let u32_id = type_id::<u32>();
+        let isize_id = type_id::<isize>();
+        let usize_id = type_id::<usize>();
+
+        // but they are not
+        let one = i32_id & u32_id | isize_id & usize_id;
+        let other = i32_id & (u32_id | isize_id) & usize_id;
+
+        assert!(one == other);
+
+        // assert!(i32_id & )
     }
 }
