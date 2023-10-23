@@ -10,22 +10,32 @@
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd, const_type_id)]
 #![recursion_limit = "64"]
 
-// todo, table can insert &'static tags, which is essentially zst, and can query it directly
-// or with other comps, tags don't contain additional data, and are case insensitive.
+// todo, change all the uninit with ptr::read and ptr::write
 
-// todo a macro that makes deriving all the serde traits easy with simple types
+// todo, states also have tags that can be queried and sorted, the reason why i want this is from this scenario
+// imagine this is a roguelike, you are chopping a tree with an axe, there is a system that handles the tree and
+// the axe components, when and how should we evoke the system, obv by a TREE OF SYSTEMS, then we need to either
+// send out a signal telling the mother system to init the chopping system
 
-// todo, filter macro: fil!((NULL & "TAG") ^ !SomeType);
+// todo, consider also being able to mark entities for deletion, soft delete so that other systems trying to
+// work on this entity are less likely to crash
 
-// todo, macro that makes deriving all the serde traits easy with simple types, types that
-// need manual impl will show an error
+// todo, make sure that all systems returns a result to its completion/failure so the ecs can just skip it
+// and log it if it doesn't work, make sure the design is fitting for the tree of systems and not just
+// the root system
+
+// todo, macro
 
 // todo, i feel like having a trait that defines all the api and then have a
 // structure that implements all this api is like the better way of doing things??
 
 // todo, thread safety, meaning all that access to anything within table shouldn't cause data race
 // preferably using atomics???
+
 // todo, should lock up the table when the saving just begins, unlock after all the stuff is done
+
+// todo, so type erased vec, when the data is transferred into the table, what if it's some type of data
+// that is thread dependent??? would that still be sound??
 
 use arrayvec::ArrayString;
 use serde::{Deserialize, Serialize};
@@ -33,10 +43,10 @@ use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
 use std::intrinsics::type_id;
 use std::marker::PhantomData;
-use std::mem::{forget, MaybeUninit};
+use std::mem::forget;
 use std::num::Wrapping;
 use std::ops::{BitAnd, BitOr, BitXor, Deref, DerefMut, Index, IndexMut, Not, Range};
-use std::ptr::copy;
+use std::ptr::{copy, read, write};
 use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{alloc::Layout, fmt::Debug};
@@ -114,7 +124,7 @@ pub struct Filter {
     ids: [IDorTAG; NUM_OF_NODES],
 }
 impl Filter {
-    pub fn from<C: Sized + 'static>() -> Self {
+    pub const fn from<C: Sized + 'static>() -> Self {
         let mut thing = Self {
             num_of_nodes: 1,
             num_of_ids: 1,
@@ -341,7 +351,6 @@ struct DenseColumn {
     layout: Layout,
 }
 impl DenseColumn {
-    // todo do not allocate for zst, that means we might need to change save/load functions
     fn new<C: 'static + Sized>() -> Self {
         let layout = Layout::new::<C>();
         if layout.size() > 0 {
@@ -423,6 +432,7 @@ impl DenseColumn {
     fn pop<C: 'static + Sized>(&mut self) -> C {
         unsafe {
             let mut value: MaybeUninit<C> = MaybeUninit::uninit();
+
             if self.layout != ZST_LAYOUT {
                 copy::<C>(self.as_slice::<C>().last().unwrap(), value.as_mut_ptr(), 1);
             }
@@ -777,8 +787,6 @@ impl Table {
                 self.apply_operation_then_cache(left, right, *invert_flag, *op)
             }
         }
-
-        // todo!()
     }
 
     fn free_all_buffers(&mut self) {
