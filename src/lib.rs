@@ -10,17 +10,10 @@
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd, const_type_id)]
 #![recursion_limit = "64"]
 
-// todo, states also have tags that can be queried and sorted, the reason why i want this is from this scenario
+// todo, consider states also have tags that can be queried and sorted, the reason why i want this is from this scenario
 // imagine this is a roguelike, you are chopping a tree with an axe, there is a system that handles the tree and
-// the axe components, when and how should we evoke the system, obv by a TREE OF SYSTEMS, then we need to either
-// send out a signal telling the mother system to init the chopping system
-
-// todo, consider also being able to mark entities for deletion, soft delete so that other systems trying to
-// work on this entity are less likely to crash
-
-// todo, make sure that all systems returns a result to its completion/failure so the ecs can just skip it
-// and log it if it doesn't work, make sure the design is fitting for the tree of systems and not just
-// the root system
+// the axe components, when and how should we evoke the system, obv by a TREE OF SYSTEMS, then we need some sorta
+// data structure the log all the comp locations for sub systems to handle them
 
 // todo, macro
 
@@ -32,8 +25,14 @@
 
 // todo, should lock up the table when the saving just begins, unlock after all the stuff is done
 
+// todo, consider change maybeuninit to ptr::read and ptr::write after revamping the zst impl
+
 // todo, so type erased vec, when the data is transferred into the table, what if it's some type of data
 // that is thread dependent??? would that still be sound??
+
+// consider also being able to mark entities for deletion, like a tag or a small component if you want additional
+// data, soft delete so that other systems trying to work on this entity are less likely to crash, and at the end
+// of the ticking, probaly also end of the root system you delete all the components
 
 use arrayvec::ArrayString;
 use serde::{Deserialize, Serialize};
@@ -429,6 +428,9 @@ impl DenseColumn {
 
     fn pop<C: 'static + Sized>(&mut self) -> C {
         unsafe {
+            // im pretty sure this is relying on undefined behavior to work
+            // but then again these would be zst, so no matter the bits are it should
+            // be fine
             let mut value: MaybeUninit<C> = MaybeUninit::uninit();
             if self.layout != ZST_LAYOUT {
                 copy::<C>(self.as_slice::<C>().last().unwrap(), value.as_mut_ptr(), 1);
@@ -883,6 +885,8 @@ impl Table {
                 let dense_index = target_sparse.as_slice()[sparse_index] & MASK_TAIL;
                 target_sparse.as_slice()[sparse_index] = 0;
 
+                // decreasing the nums by one, if it hits 0 and it left to the current free head it changes the freehead
+                // but here is a problem, the access is still valid
                 self.num_of_comp_column.as_slice()[sparse_index] -= 1;
                 if self.num_of_comp_column.as_slice()[sparse_index] == 0
                     && sparse_index < self.freehead
@@ -1284,8 +1288,7 @@ impl<C: 'static + Sized> Iterator for Query<C> {
 }
 
 // an access to a row, or an entity, but pinned to a specific component
-// todo what if this row is empty and populated by another group of components should this thing still
-// be valid??
+// rn the access can guarantee that the base comp is always valid
 pub struct Access<C: 'static + Sized> {
     ptr: *mut C,
     sparse_index: SparseIndex,
@@ -1310,7 +1313,14 @@ impl<C: 'static + Sized> Access<C> {
     }
 
     pub fn remove<T: 'static + Sized>(&mut self) -> Result<T, &'static str> {
+        if type_id::<T>() == type_id::<C>() {
+            return Err("cannot remove the base component");
+        }
         unsafe { Ok((*self.table).remove::<T>(self.sparse_index)?) }
+    }
+
+    pub fn delete(self) -> Result<C, &'static str> {
+        unsafe { Ok((*self.table).remove::<C>(self.sparse_index)?) }
     }
 
     pub fn add_tag(&self, str: &str) -> Result<(), &'static str> {
@@ -1352,21 +1362,26 @@ impl<C: 'static + Sized> AsMut<C> for Access<C> {
 }
 
 //-----------------ECS-----------------//
-pub struct ECS {
+pub struct ECS<T, E> {
     pub table: Table,
-    entry_point: fn(&mut Table),
+    entry_point: fn(&mut Table) -> Result<T, E>,
+    error_handle: fn(Result<T, E>),
 }
 
-impl ECS {
-    pub fn new(entry_point: fn(&mut Table)) -> Self {
+impl<T, E> ECS<T, E> {
+    pub fn new(
+        entry_point: fn(&mut Table) -> Result<T, E>,
+        error_handle: fn(Result<T, E>),
+    ) -> Self {
         Self {
             table: Table::new(),
             entry_point,
+            error_handle,
         }
     }
 
     pub fn tick(&mut self) {
-        (self.entry_point)(&mut self.table);
+        (self.error_handle)((self.entry_point)(&mut self.table));
         self.table.free_all_buffers();
         self.table.current_tick += 1;
     }
@@ -1465,6 +1480,8 @@ fn test_mac_pls() {
 
 #[cfg(test)]
 mod test {
+    use std::mem::size_of;
+
     use super::*;
 
     #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -1601,7 +1618,7 @@ mod test {
 
     #[test]
     fn access() {
-        let mut ecs = ECS::new(|_| {});
+        let mut ecs = ECS::new(|_| Ok(()), |_: Result<(), &'static str>| ());
 
         for each in 1..=20000 {
             ecs.table.insert::<usize>(each);
@@ -1670,6 +1687,7 @@ mod test {
         // let thing: ArrayString<128> = ArrayString::from("thiss").unwrap();
     }
 
+    #[derive(PartialEq, Eq, Debug)]
     struct Thing {}
     impl Thing {
         fn hello(&self) {}
@@ -1737,15 +1755,22 @@ mod test {
     #[test]
     fn run() {
         let mut table = Table::new();
-        let mut access: Vec<Access<()>> = vec![];
+        let mut access: Vec<Access<Thing>> = vec![];
 
         for each in 0..10 {
-            let mut acc = table.insert(());
+            let mut acc = table.insert(Thing {});
             access.push(acc);
         }
 
         for mut each in access {
-            assert_eq!(each.remove::<()>().unwrap(), ());
+            assert_eq!(each.delete().unwrap(), Thing {});
         }
+
+        let mut thing = vec![(), (), ()];
+        let another = thing.as_ptr_range();
+        thing.push(());
+        assert!(another.end == another.start);
+
+        println!("{:?}", size_of::<Thing>());
     }
 }
