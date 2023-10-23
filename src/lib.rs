@@ -10,11 +10,6 @@
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd, const_type_id)]
 #![recursion_limit = "64"]
 
-// todo, consider states also have tags that can be queried and sorted, the reason why i want this is from this scenario
-// imagine this is a roguelike, you are chopping a tree with an axe, there is a system that handles the tree and
-// the axe components, when and how should we evoke the system, obv by a TREE OF SYSTEMS, then we need some sorta
-// data structure the log all the comp locations for sub systems to handle them
-
 // todo, macro
 
 // todo, i feel like having a trait that defines all the api and then have a
