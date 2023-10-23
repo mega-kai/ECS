@@ -43,10 +43,10 @@ use std::alloc::{alloc, dealloc, realloc};
 use std::collections::HashMap;
 use std::intrinsics::type_id;
 use std::marker::PhantomData;
-use std::mem::forget;
+use std::mem::{forget, MaybeUninit};
 use std::num::Wrapping;
 use std::ops::{BitAnd, BitOr, BitXor, Deref, DerefMut, Index, IndexMut, Not, Range};
-use std::ptr::{copy, read, write};
+use std::ptr::copy;
 use std::simd::Simd;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{alloc::Layout, fmt::Debug};
@@ -432,7 +432,6 @@ impl DenseColumn {
     fn pop<C: 'static + Sized>(&mut self) -> C {
         unsafe {
             let mut value: MaybeUninit<C> = MaybeUninit::uninit();
-
             if self.layout != ZST_LAYOUT {
                 copy::<C>(self.as_slice::<C>().last().unwrap(), value.as_mut_ptr(), 1);
             }
