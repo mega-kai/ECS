@@ -10,8 +10,6 @@
 #![feature(alloc_layout_extra, core_intrinsics, portable_simd, const_type_id)]
 #![recursion_limit = "64"]
 
-// todo, change all the uninit with ptr::read and ptr::write
-
 // todo, states also have tags that can be queried and sorted, the reason why i want this is from this scenario
 // imagine this is a roguelike, you are chopping a tree with an axe, there is a system that handles the tree and
 // the axe components, when and how should we evoke the system, obv by a TREE OF SYSTEMS, then we need to either
@@ -1285,6 +1283,9 @@ impl<C: 'static + Sized> Iterator for Query<C> {
     }
 }
 
+// an access to a row, or an entity, but pinned to a specific component
+// todo what if this row is empty and populated by another group of components should this thing still
+// be valid??
 pub struct Access<C: 'static + Sized> {
     ptr: *mut C,
     sparse_index: SparseIndex,
@@ -1726,6 +1727,25 @@ mod test {
 
         assert!(one == other);
 
+        // it would seem that Unique::dangling() is used to handle zst
+        let mut thing = Vec::new();
+        thing.push(());
+
         // assert!(i32_id & )
+    }
+
+    #[test]
+    fn run() {
+        let mut table = Table::new();
+        let mut access: Vec<Access<()>> = vec![];
+
+        for each in 0..10 {
+            let mut acc = table.insert(());
+            access.push(acc);
+        }
+
+        for mut each in access {
+            assert_eq!(each.remove::<()>().unwrap(), ());
+        }
     }
 }
